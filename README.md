@@ -22,7 +22,7 @@ Bu proje, Yükseköğretim Kurulu (YÖK) Ulusal Tez Merkezi'ne erişimi kolayla�
 
 Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istemcileriyle kullanmak isteyenler içindir.
 
-* **Python Kurulumu:** Sisteminizde Python (`pyproject.toml` dosyasında belirtilen sürüm, örn: `>=3.12` veya Playwright uyumluluğu için 3.11) kurulu olmalıdır. Kurulum sırasında "**Add Python to PATH**" (Python'ı PATH'e ekle) seçeneğini işaretlemeyi unutmayın.
+* **Python Kurulumu:** Sisteminizde Python 3.11 kurulu olmalıdır. Kurulum sırasında "**Add Python to PATH**" (Python'ı PATH'e ekle) seçeneğini işaretlemeyi unutmayın. [Buradan](https://www.python.org/downloads/) 3.11 sürümünü indirebilirsiniz.
 * **Git Kurulumu (Windows):** Bilgisayarınıza [git](https://git-scm.com/downloads/win) yazılımını indirip kurun. "Git for Windows/x64 Setup" seçeneğini indirmelisiniz.
 * **`uv` Kurulumu:**
     * **Windows Kullanıcıları (PowerShell):** Bir CMD ekranı açın ve bu kodu çalıştırın: `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
@@ -30,31 +30,29 @@ Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istem
 * **Microsoft Visual C++ Redistributable (Windows):** Bazı Python paketlerinin doğru çalışması için gereklidir. [Buradan](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170) indirip kurun.
 * İşletim sisteminize uygun [5ire](https://5ire.app) MCP istemcisini indirip kurun.
 * 5ire'ı açın. **Workspace -> Providers** menüsünden kullanmak istediğiniz LLM servisinin API anahtarını girin.
-* **Tools** menüsüne girin. **+Local** yazan butona basın.
-    * **Tool Key:** `yoktezmcp` (veya tercih ettiğiniz bir anahtar)
+* **Tools** menüsüne girin. **+Local** veya **New** yazan butona basın.
+    * **Tool Key:** `yoktezmcp`
     * **Name:** `YokTez MCP`
-    * **Command:** (`pyproject.toml` dosyanızda `[project.scripts]` altında `yoktez-mcp = "yoktez_mcp_server:main"` tanımlaması olduğunu varsayarak):
-        \`\`\`
+    * **Command:**
+        ```
         uvx --from git+https://github.com/saidsurucu/yoktez-mcp yoktez-mcp
-        \`\`\`
-        Bu komut, `yoktez-mcp` paketini (ve `pyproject.toml`'de belirtilen bağımlılıklarını) belirtilen Git deposundan çekip kuracak ve tanımladığınız `yoktez-mcp` script'ini çalıştıracaktır.
+        ```
     * **Save** butonuna basarak kaydedin.
 
-![5ire YokTez MCP Ayarları](./5ire_yoktez_ayarlar.png)
-*(Kendi 5ire ayar görselinizle değiştirin)*
+![5ire YokTez MCP Ayarları](./5ire-ayarlar.png)
 
-* Şimdi **Tools** altında **YokTez MCP**'yi görüyor olmalısınız. Etkinleştirin (yeşil ışık yanmalı).
+* Şimdi **Tools** altında **YokTez MCP**'yi görüyor olmalısınız. Üstüne geldiğinizde sağda çıkan butona tıklayıp etkinleştirin (yeşil ışık yanmalı).
 * Artık YokTez MCP ile konuşabilirsiniz.
 
 ---
 ⚙️ **Claude Desktop Manuel Kurulumu**
 
 
-1.  **Ön Gereksinimler:** Python, `uv`, (Windows için) Microsoft Visual C++ Redistributable ve Playwright tarayıcılarının sisteminizde kurulu olduğundan emin olun. Detaylı bilgi için yukarıdaki "5ire için Kurulum" bölümündeki ilgili adımlara bakabilirsiniz.
+1.  **Ön Gereksinimler:** Python, `uv`, (Windows için) Microsoft Visual C++ Redistributable'ın sisteminizde kurulu olduğundan emin olun. Detaylı bilgi için yukarıdaki "5ire için Kurulum" bölümündeki ilgili adımlara bakabilirsiniz.
 2.  Claude Desktop **Settings -> Developer -> Edit Config**.
 3.  Açılan `claude_desktop_config.json` dosyasına `mcpServers` altına ekleyin:
 
-    \`\`\`json
+    ```json
     {
       "mcpServers": {
         // ... (varsa diğer sunucularınız) ...
@@ -67,7 +65,7 @@ Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istem
         }
       }
     }
-    \`\`\`
+    ```
 
 4.  Claude Desktop'ı kapatıp yeniden başlatın.
 
