@@ -39,7 +39,7 @@ Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istem
         ```
     * **Save** butonuna basarak kaydedin.
 
-![5ire YokTez MCP Ayarları](./5ire-ayarlar.png)
+![5ire YokTez MCP Ayarları](./5ire-settings.png)
 
 * Şimdi **Tools** altında **YokTez MCP**'yi görüyor olmalısınız. Üstüne geldiğinizde sağda çıkan butona tıklayıp etkinleştirin (yeşil ışık yanmalı).
 * Artık YokTez MCP ile konuşabilirsiniz.
