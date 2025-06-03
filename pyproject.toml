@@ -1,7 +1,11 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "yoktez-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "MCP Server for Turkish Thesis Database"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -15,3 +19,9 @@ dependencies = [
     "pydantic>=2.11.4",
     "pypdf>=5.5.0",
 ]
+
+[project.scripts]
+yoktez-mcp = "yoktez_mcp_server:main"
+
+[tool.setuptools]
+py-modules = ["yoktez_mcp_server", "client", "models"]
