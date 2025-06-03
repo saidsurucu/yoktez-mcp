@@ -1,0 +1,8 @@
+beautifulsoup4
+fastmcp
+httpx
+markitdown[pdf]
+playwright
+pydantic
+pypdf
+lxml
