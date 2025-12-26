@@ -74,7 +74,7 @@ Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istem
 Bu FastMCP sunucusu LLM modelleri için aşağıdaki araçları sunar:
 
 * **`search_yok_tez_detailed`**: YÖK Ulusal Tez Merkezi'nde çeşitli detaylı kriterleri kullanarak tez araması yapar.
-    * **Parametreler**: `tez_ad`, `yazar_ad_soyad`, `danisman_ad_soyad`, `universite_ad`, `enstitu_ad`, `anabilim_dal_ad`, `bilim_dal_ad`, `tez_no`, `konu_basliklari`, `dizin_terimleri`, `ozet_metni`, `tez_turu`, `izin_durumu`, `tez_durumu`, `dil`, `enstitu_grubu`, `yil_baslangic`, `yil_bitis`, `page`, `results_per_page`.
+    * **Parametreler**: `thesis_title`, `author_name`, `advisor_name`, `university_name`, `institute_name`, `department_name`, `discipline_name`, `thesis_number`, `subject_headings`, `index_terms`, `abstract_text`, `thesis_type`, `permission_status`, `thesis_status`, `language`, `institute_group`, `year_start`, `year_end`, `page`, `results_per_page`.
     * **Döndürdüğü Değer**: `YokTezSearchResult` (sayfalanmış tez özeti listesi, toplam sonuç sayısı vb. içerir)
 
 * **`get_yok_tez_document_markdown`**: Belirli bir YÖK tezinin PDF içeriğini, istenen PDF sayfasına göre Markdown formatında getirir.
