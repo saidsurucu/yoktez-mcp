@@ -1,8 +1,10 @@
+aiofiles>=23.0.0
 beautifulsoup4
-fastmcp
-httpx
+fastmcp>=2.14.1
+ftfy
+httpx[http2]
+lxml
 markitdown[pdf]
 playwright
 pydantic
 pypdf
-lxml

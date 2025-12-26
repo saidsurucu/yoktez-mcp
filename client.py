@@ -1,12 +1,11 @@
 # client.py
 import asyncio
 import logging
-import os
 import re
 import math
 import html
 import urllib.parse
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 import io
 
 from pydantic import HttpUrl # Ensure HttpUrl is imported
@@ -23,6 +22,8 @@ from models import (
     YokTezSearchRequest, YokTezCompactThesisDetail, YokTezSearchResult,
     YokTezDocumentRequest, YokTezDocumentMarkdown, InternalThesisDetail
 )
+from cache import MultiTierCache, AIOFILES_AVAILABLE
+from browser import BrowserManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ if not logger.hasHandlers(): # Pragma: no cover
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
+
 
 class YokTezApiClient:
     """
@@ -42,24 +44,77 @@ class YokTezApiClient:
     YOK_TEZ_SEARCH_ACTION_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/SearchTez"
     YOK_TEZ_DETAIL_URL_TEMPLATE = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezDetay.jsp?id={{thesis_key}}"
 
-    def __init__(self, request_timeout: float = 60.0, playwright_headless: bool = True):
+    def __init__(
+        self,
+        request_timeout: float = 60.0,
+        playwright_headless: bool = True,
+        cache_max_items: int = 50,
+        cache_max_size_mb: int = 100,
+        enable_disk_cache: bool = True,
+        disk_cache_max_size_mb: int = 500,
+        disk_cache_ttl_days: int = 30,
+        enable_browser_pool: bool = True,
+        browser_pool_size: int = 3
+    ):
         """
         Initializes the YokTezApiClient.
 
         Args:
             request_timeout: Timeout for HTTP requests in seconds.
             playwright_headless: Whether to run the Playwright browser in headless mode.
+            cache_max_items: Maximum number of PDFs to cache in memory.
+            cache_max_size_mb: Maximum total memory cache size in megabytes.
+            enable_disk_cache: Whether to enable persistent disk caching.
+            disk_cache_max_size_mb: Maximum disk cache size in megabytes.
+            disk_cache_ttl_days: Time-to-live for disk cached items in days.
+            enable_browser_pool: Whether to use browser context pooling (recommended).
+            browser_pool_size: Maximum number of browser contexts in pool.
         """
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
         self._headless = playwright_headless
         self._request_timeout = request_timeout
-        self._pdf_bytes_cache: Dict[str, bytes] = {}
+
+        # Browser pool for efficient context reuse
+        self._enable_browser_pool = enable_browser_pool
+        self._browser_manager: Optional[BrowserManager] = None
+        if enable_browser_pool:
+            self._browser_manager = BrowserManager(
+                headless=playwright_headless,
+                pool_size=browser_pool_size
+            )
+
+        # Multi-tier cache: Memory (L1) -> Disk (L2)
+        # Disk cache survives restarts; memory cache provides fast access
+        self._pdf_bytes_cache = MultiTierCache(
+            memory_max_items=cache_max_items,
+            memory_max_size_mb=cache_max_size_mb,
+            enable_disk_cache=enable_disk_cache and AIOFILES_AVAILABLE,
+            disk_max_size_mb=disk_cache_max_size_mb,
+            disk_ttl_days=disk_cache_ttl_days
+        )
+
+        # Optimized HTTP client with connection pooling and HTTP/2
         self._http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(request_timeout, read=request_timeout * 2),
+            timeout=httpx.Timeout(
+                connect=10.0,           # Connection timeout
+                read=request_timeout * 2,  # Read timeout (longer for large PDFs)
+                write=30.0,             # Write timeout
+                pool=5.0                # Pool connection timeout
+            ),
+            limits=httpx.Limits(
+                max_connections=20,           # Max total connections
+                max_keepalive_connections=10, # Max keepalive connections
+                keepalive_expiry=30.0         # Keepalive expiry in seconds
+            ),
+            http2=True,                 # Enable HTTP/2 for better performance
             follow_redirects=True,
+            verify=False,               # Disable SSL verification (YÖK cert issues on macOS)
             headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
+                "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Accept-Encoding": "gzip, deflate, br"
             }
         )
         self._md_converter = MarkItDown()
@@ -93,8 +148,22 @@ class YokTezApiClient:
         return page
 
     async def close_client_session(self):
-        """Closes the Playwright browser and HTTPX client session."""
+        """Closes the Playwright browser, HTTPX client session, and clears cache."""
         logger.info("YokTezApiClient: Closing resources...")
+
+        # Log cache stats before clearing
+        cache_stats = self._pdf_bytes_cache.stats
+        logger.info(f"Cache stats before close: {cache_stats}")
+        await self._pdf_bytes_cache.clear()
+
+        # Close browser pool if enabled
+        if self._browser_manager:
+            logger.info("Closing browser pool...")
+            browser_stats = self._browser_manager.stats
+            logger.info(f"Browser pool stats before close: {browser_stats}")
+            await self._browser_manager.close()
+
+        # Close legacy browser if pool not used
         if self._browser and self._browser.is_connected():
             logger.info("Closing Playwright browser...")
             await self._browser.close()
@@ -151,7 +220,8 @@ class YokTezApiClient:
                 data["pdf_permission_error_message"] = "PDF download link or known 'no permission' message not found."
             data["is_pdf_permissible"] = False
         kunye_cell = cells[2]
-        for br in kunye_cell.find_all("br"): br.replace_with("\n")
+        for br in kunye_cell.find_all("br"):
+            br.replace_with("\n")
         kunye_parts = [part.strip() for part in kunye_cell.get_text(separator="\n").split('\n') if part.strip()]
         current_part_index = 0
         if kunye_parts:
@@ -164,26 +234,40 @@ class YokTezApiClient:
                 data["title_combined"] = " ".join(title_candidates)
                 title_split = data["title_combined"].split('/')
                 data["title_tr"] = title_split[0].strip()
-                if len(title_split) > 1: data["title_en"] = " / ".join(ts.strip() for ts in title_split[1:])
+                if len(title_split) > 1:
+                    data["title_en"] = " / ".join(ts.strip() for ts in title_split[1:])
             for i in range(current_part_index, len(kunye_parts)):
                 part = kunye_parts[i]
-                if part.startswith("Yazar:"): data["author"] = part.replace("Yazar:", "",1).strip()
-                elif part.startswith("Danışman:"): data["advisor"] = part.replace("Danışman:", "",1).strip()
-                elif part.startswith("Yer Bilgisi:"): data["location_info"] = part.replace("Yer Bilgisi:", "",1).strip()
-                elif part.startswith("Konu:"): data["subject_info"] = part.replace("Konu:", "",1).strip()
-                elif part.startswith("Dizin:"): data["index_terms"] = part.replace("Dizin:", "",1).strip()
+                if part.startswith("Yazar:"):
+                    data["author"] = part.replace("Yazar:", "", 1).strip()
+                elif part.startswith("Danışman:"):
+                    data["advisor"] = part.replace("Danışman:", "", 1).strip()
+                elif part.startswith("Yer Bilgisi:"):
+                    data["location_info"] = part.replace("Yer Bilgisi:", "", 1).strip()
+                elif part.startswith("Konu:"):
+                    data["subject_info"] = part.replace("Konu:", "", 1).strip()
+                elif part.startswith("Dizin:"):
+                    data["index_terms"] = part.replace("Dizin:", "", 1).strip()
         durum_cell = cells[3]
-        for br in durum_cell.find_all("br"): br.replace_with("\n")
+        for br in durum_cell.find_all("br"):
+            br.replace_with("\n")
         durum_parts = [part.strip() for part in durum_cell.get_text(separator="\n").split('\n') if part.strip()]
-        if len(durum_parts) > 0: data["status_text"] = durum_parts[0]
-        if len(durum_parts) > 1: data["thesis_type_text"] = durum_parts[1]
-        if len(durum_parts) > 2: data["language_text"] = durum_parts[2]
-        if len(durum_parts) > 3: data["year_text"] = durum_parts[3]
-        if len(durum_parts) > 4: data["pages_text"] = durum_parts[4]
+        if len(durum_parts) > 0:
+            data["status_text"] = durum_parts[0]
+        if len(durum_parts) > 1:
+            data["thesis_type_text"] = durum_parts[1]
+        if len(durum_parts) > 2:
+            data["language_text"] = durum_parts[2]
+        if len(durum_parts) > 3:
+            data["year_text"] = durum_parts[3]
+        if len(durum_parts) > 4:
+            data["pages_text"] = durum_parts[4]
         abstract_tr_td = main_table.find("td", id="td0")
-        if abstract_tr_td: data["abstract_tr"] = abstract_tr_td.get_text(strip=True)
+        if abstract_tr_td:
+            data["abstract_tr"] = abstract_tr_td.get_text(strip=True)
         abstract_en_td = main_table.find("td", id="td1")
-        if abstract_en_td: data["abstract_en"] = abstract_en_td.get_text(strip=True)
+        if abstract_en_td:
+            data["abstract_en"] = abstract_en_td.get_text(strip=True)
         return data
 
     async def _fetch_thesis_details_from_key(self, thesis_key: str) -> Optional[InternalThesisDetail]:
@@ -239,10 +323,12 @@ class YokTezApiClient:
                     tez_no_val = user_id_match.group(3).strip()
 
                 name_match = re.search(r'name:\s*"([^"]*)"', doc_str)
-                if name_match: author_val = html.unescape(name_match.group(1).strip())
+                if name_match:
+                    author_val = html.unescape(name_match.group(1).strip())
 
                 age_match = re.search(r'age:\s*"([^"]*)"', doc_str)
-                if age_match: year_val = age_match.group(1).strip()
+                if age_match:
+                    year_val = age_match.group(1).strip()
                 
                 weight_match = re.search(r'weight:\s*"((?:[^"\\]|\\.)*)"', doc_str, re.DOTALL)
                 if weight_match:
@@ -262,29 +348,39 @@ class YokTezApiClient:
                         current_node = br_tag.previous_sibling
                         while current_node:
                             node_text = ""
-                            if isinstance(current_node, str): node_text = current_node.strip()
-                            elif hasattr(current_node, 'get_text'): node_text = current_node.get_text(strip=True)
-                            if node_text: original_title_parts.insert(0, node_text)
+                            if isinstance(current_node, str):
+                                node_text = current_node.strip()
+                            elif hasattr(current_node, 'get_text'):
+                                node_text = current_node.get_text(strip=True)
+                            if node_text:
+                                original_title_parts.insert(0, node_text)
                             current_node = current_node.previous_sibling
                         title_original_val = " ".join(original_title_parts).strip("'").strip()
                         if not title_original_val and title_soup.contents:
-                             first_content = title_soup.contents[0]
-                             if isinstance(first_content, str): title_original_val = first_content.strip("'").strip()
-                             elif hasattr(first_content, 'get_text'): title_original_val = first_content.get_text(strip=True).strip("'").strip()
+                            first_content = title_soup.contents[0]
+                            if isinstance(first_content, str):
+                                title_original_val = first_content.strip("'").strip()
+                            elif hasattr(first_content, 'get_text'):
+                                title_original_val = first_content.get_text(strip=True).strip("'").strip()
                         italic_span = title_soup.find('span', style=lambda value: value and 'font-style: italic' in value.lower())
-                        if italic_span: title_translated_val = italic_span.get_text(strip=True)
+                        if italic_span:
+                            title_translated_val = italic_span.get_text(strip=True)
                         else:
                             next_node = br_tag.next_sibling
-                            if next_node and isinstance(next_node, str) and next_node.strip(): title_translated_val = next_node.strip()
-                            elif next_node and hasattr(next_node, 'get_text'): title_translated_val = next_node.get_text(strip=True)
+                            if next_node and isinstance(next_node, str) and next_node.strip():
+                                title_translated_val = next_node.strip()
+                            elif next_node and hasattr(next_node, 'get_text'):
+                                title_translated_val = next_node.get_text(strip=True)
                     else:
                         title_original_val = title_soup.get_text(strip=True).strip("'").strip()
 
                 uni_match = re.search(r'uni:\s*"([^"]*)"', doc_str)
-                if uni_match: university_val = html.unescape(uni_match.group(1).strip())
+                if uni_match:
+                    university_val = html.unescape(uni_match.group(1).strip())
 
                 important_match = re.search(r'important:\s*"([^"]*)"', doc_str)
-                if important_match: thesis_type_val = html.unescape(important_match.group(1).strip())
+                if important_match:
+                    thesis_type_val = html.unescape(important_match.group(1).strip())
 
                 some_date_match = re.search(r'someDate:\s*"([^"]*)"', doc_str)
                 if some_date_match:
@@ -310,11 +406,38 @@ class YokTezApiClient:
                 logger.error(f"Error parsing a 'doc' object from JS: {e_parse}. Fragment: {doc_str[:200]}", exc_info=False)
         return theses_details
 
+    async def _execute_with_page(self, operation):
+        """
+        Execute an async operation with a browser page.
+        Uses browser pool if enabled, otherwise falls back to direct page creation.
+
+        Args:
+            operation: Async function that takes a Page and returns a result.
+
+        Returns:
+            The result of the operation.
+        """
+        if self._browser_manager:
+            # Use browser pool (recommended)
+            async with self._browser_manager.get_page() as page:
+                return await operation(page)
+        else:
+            # Fall back to legacy direct page creation
+            pw_page = None
+            try:
+                pw_page = await self._get_playwright_page()
+                return await operation(pw_page)
+            finally:
+                if pw_page:
+                    try:
+                        await pw_page.close()
+                    except Exception as e:
+                        logger.error(f"Error closing playwright page: {e}")
+
     async def search_theses(self, request: YokTezSearchRequest) -> YokTezSearchResult:
         """
         Performs a search on YÖK National Thesis Center using the 'Detailed Search' form.
         """
-        pw_page: Optional[Page] = None
         all_compact_details: List[YokTezCompactThesisDetail] = []
         total_results_on_yok: Optional[int] = None
         results_displayed_in_js: Optional[int] = None
@@ -322,15 +445,21 @@ class YokTezApiClient:
         request_params_dict = request.model_dump(exclude_defaults=True)
         logger.info(f"[SEARCH] Attempting detailed search with parameters: {request_params_dict}")
 
-        try:
-            pw_page = await self._get_playwright_page()
+        async def do_search(pw_page: Page) -> None:
+            """Inner function that performs the actual search with a page."""
+            nonlocal all_compact_details, total_results_on_yok, results_displayed_in_js, error_msg
+
             await pw_page.goto(self.YOK_TEZ_SEARCH_PAGE_URL, timeout=self._request_timeout * 1000)
             form_locator = pw_page.locator('form[name="GForm"]')
-            
-            if request.universite_ad: await form_locator.locator('input[name="uniad"]').fill(request.universite_ad.upper())
-            if request.enstitu_ad: await form_locator.locator('input[name="ensad"]').fill(request.enstitu_ad.upper())
-            if request.anabilim_dal_ad: await form_locator.locator('input[name="abdad"]').fill(request.anabilim_dal_ad)
-            if request.bilim_dal_ad: await form_locator.locator('input[name="bilim"]').fill(request.bilim_dal_ad)
+
+            if request.universite_ad:
+                await form_locator.locator('input[name="uniad"]').fill(request.universite_ad.upper())
+            if request.enstitu_ad:
+                await form_locator.locator('input[name="ensad"]').fill(request.enstitu_ad.upper())
+            if request.anabilim_dal_ad:
+                await form_locator.locator('input[name="abdad"]').fill(request.anabilim_dal_ad)
+            if request.bilim_dal_ad:
+                await form_locator.locator('input[name="bilim"]').fill(request.bilim_dal_ad)
             if request.tez_turu and hasattr(request.tez_turu, 'value') and request.tez_turu.value != "0":
                 await form_locator.locator('select[name="Tur"]').select_option(value=request.tez_turu.value)
             if request.yil_baslangic and request.yil_baslangic != "0":
@@ -339,23 +468,30 @@ class YokTezApiClient:
                 await form_locator.locator('select[name="yil2"]').select_option(value=str(request.yil_bitis))
             if request.izin_durumu and hasattr(request.izin_durumu, 'value') and request.izin_durumu.value != "0":
                 await form_locator.locator('select[name="izin"]').select_option(value=request.izin_durumu.value)
-            if request.tez_no: await form_locator.locator('input[name="TezNo"]').fill(request.tez_no)
+            if request.tez_no:
+                await form_locator.locator('input[name="TezNo"]').fill(request.tez_no)
             if request.tez_durumu and hasattr(request.tez_durumu, 'value'):
                 await form_locator.locator('select[name="Durum"]').select_option(value=request.tez_durumu.value)
-            if request.tez_ad: await form_locator.locator('input[name="TezAd"]').fill(request.tez_ad)
+            if request.tez_ad:
+                await form_locator.locator('input[name="TezAd"]').fill(request.tez_ad)
             if request.dil and hasattr(request.dil, 'value') and request.dil.value != "0":
                 await form_locator.locator('select[name="Dil"]').select_option(value=request.dil.value)
-            if request.yazar_ad_soyad: await form_locator.locator('input[name="AdSoyad"]').fill(request.yazar_ad_soyad.upper())
-            if request.konu_basliklari: await form_locator.locator('input[name="Konu"]').fill(request.konu_basliklari)
+            if request.yazar_ad_soyad:
+                await form_locator.locator('input[name="AdSoyad"]').fill(request.yazar_ad_soyad.upper())
+            if request.konu_basliklari:
+                await form_locator.locator('input[name="Konu"]').fill(request.konu_basliklari)
             if request.enstitu_grubu and hasattr(request.enstitu_grubu, 'value') and request.enstitu_grubu.value != "":
                 await form_locator.locator('select[name="EnstituGrubu"]').select_option(value=request.enstitu_grubu.value)
-            if request.danisman_ad_soyad: await form_locator.locator('input[name="DanismanAdSoyad"]').fill(request.danisman_ad_soyad.upper())
-            if request.dizin_terimleri: await form_locator.locator('input[name="Dizin"]').fill(request.dizin_terimleri)
-            if request.ozet_metni: await form_locator.locator('input[name="Metin"]').fill(request.ozet_metni)
-            
-            await form_locator.locator('input[name="islem"]').evaluate("node => node.value = '2'") # Hidden field for detailed search
+            if request.danisman_ad_soyad:
+                await form_locator.locator('input[name="DanismanAdSoyad"]').fill(request.danisman_ad_soyad.upper())
+            if request.dizin_terimleri:
+                await form_locator.locator('input[name="Dizin"]').fill(request.dizin_terimleri)
+            if request.ozet_metni:
+                await form_locator.locator('input[name="Metin"]').fill(request.ozet_metni)
+
+            await form_locator.locator('input[name="islem"]').evaluate("node => node.value = '2'")
             logger.info("[SEARCH] Form fields filled. Submitting GForm...")
-            
+
             async with pw_page.expect_navigation(wait_until="networkidle", timeout=self._request_timeout * 1000):
                 await form_locator.locator('input[name="-find"]').click()
 
@@ -367,37 +503,51 @@ class YokTezApiClient:
             if div_uyari:
                 div_text = div_uyari.get_text(strip=True, separator=" ")
                 total_match = re.search(r"(\d+)\s*kayıt bulundu", div_text)
-                if total_match: total_results_on_yok = int(total_match.group(1))
+                if total_match:
+                    total_results_on_yok = int(total_match.group(1))
                 displayed_match = re.search(r"(\d+)\s*tanesi görüntülenmektedir", div_text)
-                if displayed_match: results_displayed_in_js = int(displayed_match.group(1))
+                if displayed_match:
+                    results_displayed_in_js = int(displayed_match.group(1))
                 if "kayıt bulunamadı" in div_text.lower() or "tez bulunamadı" in div_text.lower():
-                    total_results_on_yok = 0; results_displayed_in_js = 0
-            else: logger.warning("divuyari (result count) not found.")
+                    total_results_on_yok = 0
+                    results_displayed_in_js = 0
+            else:
+                logger.warning("divuyari (result count) not found.")
 
             scripts = soup.find_all("script", type="text/javascript")
-            selected_script_content = next((s.string for s in scripts if s.string and "var waTable = emre(\"#div1\").WATable({" in s.string and "function getData()" in s.string), None)
-            
-            if selected_script_content:
-                all_compact_details = self._parse_watable_js_data(selected_script_content)
-                if results_displayed_in_js is None: results_displayed_in_js = len(all_compact_details)
-                elif len(all_compact_details) != results_displayed_in_js :
-                    logger.warning(f"Mismatch: Parsed {len(all_compact_details)} from JS, divuyari stated {results_displayed_in_js}.")
-            elif total_results_on_yok is not None and total_results_on_yok > 0: error_msg = "YÖK indicates results, but WATable JS data not found."
-            elif total_results_on_yok == 0: error_msg = "No theses found (confirmed by YÖK)."
-            else: error_msg = "Could not determine result count and no WATable JS data found."
-        
-        except asyncio.TimeoutError: error_msg = "Timeout during Playwright operation."
-        except Exception as e: error_msg = f"Unexpected error during search: {str(e)}"
-        finally:
-            if pw_page:
-                try: await pw_page.close()
-                except Exception as e_close: logger.error(f"Error closing playwright context: {e_close}")
+            selected_script_content = next(
+                (s.string for s in scripts if s.string and "var waTable = emre(\"#div1\").WATable({" in s.string and "function getData()" in s.string),
+                None
+            )
 
-        if total_results_on_yok is None: total_results_on_yok = len(all_compact_details)
+            if selected_script_content:
+                all_compact_details[:] = self._parse_watable_js_data(selected_script_content)
+                if results_displayed_in_js is None:
+                    results_displayed_in_js = len(all_compact_details)
+                elif len(all_compact_details) != results_displayed_in_js:
+                    logger.warning(f"Mismatch: Parsed {len(all_compact_details)} from JS, divuyari stated {results_displayed_in_js}.")
+            elif total_results_on_yok is not None and total_results_on_yok > 0:
+                error_msg = "YÖK indicates results, but WATable JS data not found."
+            elif total_results_on_yok == 0:
+                error_msg = "No theses found (confirmed by YÖK)."
+            else:
+                error_msg = "Could not determine result count and no WATable JS data found."
+
+        # Execute search using browser pool or legacy method
+        try:
+            await self._execute_with_page(do_search)
+        except asyncio.TimeoutError:
+            error_msg = "Timeout during Playwright operation."
+        except Exception as e:
+            error_msg = f"Unexpected error during search: {str(e)}"
+
+        if total_results_on_yok is None:
+            total_results_on_yok = len(all_compact_details)
         available_for_pagination = results_displayed_in_js if results_displayed_in_js is not None else len(all_compact_details)
         total_pages_in_js_batch = math.ceil(available_for_pagination / request.limit_per_page) if available_for_pagination > 0 else 0
-        
-        if total_results_on_yok == 0 and not error_msg: error_msg = "No theses found for criteria."
+
+        if total_results_on_yok == 0 and not error_msg:
+            error_msg = "No theses found for criteria."
 
         paginated_results: List[YokTezCompactThesisDetail] = []
         if request.page > total_pages_in_js_batch and total_pages_in_js_batch > 0:
@@ -427,7 +577,7 @@ class YokTezApiClient:
         isolates the specified PDF page using pypdf, and converts that page to Markdown using MarkItDown.
         """
         detail_page_url_str = str(request.detail_page_url)
-        original_pdf_bytes = self._pdf_bytes_cache.get(detail_page_url_str)
+        original_pdf_bytes = await self._pdf_bytes_cache.get(detail_page_url_str)
         metadata: Dict[str, Any] = {}
         error_msg: Optional[str] = None
         actual_pdf_url_str: Optional[str] = None
@@ -447,21 +597,30 @@ class YokTezApiClient:
             extracted_thesis_title = metadata.get("title_tr") or metadata.get("title_combined")
             extracted_thesis_author = metadata.get("author")
             is_pdf_permissible = metadata.get("is_pdf_permissible", False)
-            if metadata.get("metadata_error_message"): error_msg = (error_msg + "; " if error_msg else "") + metadata["metadata_error_message"]
-            if metadata.get("pdf_permission_error_message"): error_msg = (error_msg + "; " if error_msg else "") + metadata["pdf_permission_error_message"]
-        except httpx.RequestError as e: error_msg = (error_msg + "; " if error_msg else "") + f"Failed to fetch detail page: {e}"
-        except Exception as e: error_msg = (error_msg + "; " if error_msg else "") + f"Error parsing detail page: {e}"
+            if metadata.get("metadata_error_message"):
+                error_msg = (error_msg + "; " if error_msg else "") + metadata["metadata_error_message"]
+            if metadata.get("pdf_permission_error_message"):
+                error_msg = (error_msg + "; " if error_msg else "") + metadata["pdf_permission_error_message"]
+        except httpx.RequestError as e:
+            error_msg = (error_msg + "; " if error_msg else "") + f"Failed to fetch detail page: {e}"
+        except Exception as e:
+            error_msg = (error_msg + "; " if error_msg else "") + f"Error parsing detail page: {e}"
 
         if is_pdf_permissible and actual_pdf_url_str and not original_pdf_bytes:
             try:
                 async with self._http_client.stream("GET", actual_pdf_url_str, timeout=self._request_timeout * 2) as pdf_response:
                     pdf_response.raise_for_status()
                     original_pdf_bytes = await pdf_response.aread()
-                if not original_pdf_bytes: error_msg = (error_msg + "; " if error_msg else "") + "PDF empty or download failed."
-                else: self._pdf_bytes_cache[detail_page_url_str] = original_pdf_bytes
-            except Exception as e: error_msg = (error_msg + "; " if error_msg else "") + f"PDF download error: {e}"
-        elif is_pdf_permissible and original_pdf_bytes: logger.info(f"CACHE Hit for PDF: {detail_page_url_str}")
-        elif not is_pdf_permissible and not error_msg: error_msg = (error_msg + "; " if error_msg else "") + metadata.get("pdf_permission_error_message", "PDF not permissible.")
+                if not original_pdf_bytes:
+                    error_msg = (error_msg + "; " if error_msg else "") + "PDF empty or download failed."
+                else:
+                    await self._pdf_bytes_cache.set(detail_page_url_str, original_pdf_bytes)
+            except Exception as e:
+                error_msg = (error_msg + "; " if error_msg else "") + f"PDF download error: {e}"
+        elif is_pdf_permissible and original_pdf_bytes:
+            logger.info(f"CACHE Hit for PDF: {detail_page_url_str}")
+        elif not is_pdf_permissible and not error_msg:
+            error_msg = (error_msg + "; " if error_msg else "") + metadata.get("pdf_permission_error_message", "PDF not permissible.")
 
         if original_pdf_bytes and is_pdf_permissible:
             try:
@@ -470,8 +629,10 @@ class YokTezApiClient:
                 if not (0 < request.page_number <= total_pdf_pages):
                     error_msg = (error_msg + "; " if error_msg else "") + f"Page {request.page_number} out of range (1-{total_pdf_pages})."
                 else:
-                    writer = PdfWriter(); writer.add_page(reader.pages[request.page_number - 1])
-                    single_pg_io = io.BytesIO(); writer.write(single_pg_io)
+                    writer = PdfWriter()
+                    writer.add_page(reader.pages[request.page_number - 1])
+                    single_pg_io = io.BytesIO()
+                    writer.write(single_pg_io)
                     single_pg_bytes = single_pg_io.getvalue()
                     if single_pg_bytes:
                         try:
@@ -479,14 +640,20 @@ class YokTezApiClient:
                             page_markdown_content = conv_res.text_content
                             if page_markdown_content is not None:
                                 characters_on_page = len(page_markdown_content)
-                                if not page_markdown_content.strip() and characters_on_page == 0: logger.warning(f"MarkItDown: Empty content page {request.page_number}.")
+                                if not page_markdown_content.strip() and characters_on_page == 0:
+                                    logger.warning(f"MarkItDown: Empty content page {request.page_number}.")
                             else:
-                                characters_on_page = 0; page_markdown_content = None
+                                characters_on_page = 0
+                                page_markdown_content = None
                                 error_msg = (error_msg + "; " if error_msg else "") + f"MarkItDown: No content for page {request.page_number}."
-                        except Exception as e: error_msg = (error_msg + "; " if error_msg else "") + f"MarkItDown conversion error: {e}"
-                    else: error_msg = (error_msg + "; " if error_msg else "") + "pypdf: Failed to isolate page."
-            except Exception as e: error_msg = (error_msg + "; " if error_msg else "") + f"pypdf processing error: {e}"
-        elif not error_msg and is_pdf_permissible and not original_pdf_bytes: error_msg = (error_msg + "; " if error_msg else "") + "PDF content unavailable."
+                        except Exception as e:
+                            error_msg = (error_msg + "; " if error_msg else "") + f"MarkItDown conversion error: {e}"
+                    else:
+                        error_msg = (error_msg + "; " if error_msg else "") + "pypdf: Failed to isolate page."
+            except Exception as e:
+                error_msg = (error_msg + "; " if error_msg else "") + f"pypdf processing error: {e}"
+        elif not error_msg and is_pdf_permissible and not original_pdf_bytes:
+            error_msg = (error_msg + "; " if error_msg else "") + "PDF content unavailable."
         
         return YokTezDocumentMarkdown(
             page_markdown_content=page_markdown_content, source_detail_page_url=request.detail_page_url,

@@ -9,10 +9,11 @@ description = "MCP Server for Turkish Thesis Database"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "aiofiles>=23.0.0",
     "beautifulsoup4>=4.13.4",
-    "fastmcp>=2.5.1",
+    "fastmcp>=2.14.1",
     "ftfy>=6.3.1",
-    "httpx>=0.28.1",
+    "httpx[http2]>=0.28.1",
     "lxml>=5.4.0",
     "markitdown[pdf]>=0.1.1",
     "playwright>=1.52.0",
@@ -24,4 +25,4 @@ dependencies = [
 yoktez-mcp = "yoktez_mcp_server:main"
 
 [tool.setuptools]
-py-modules = ["yoktez_mcp_server", "client", "models"]
+py-modules = ["yoktez_mcp_server", "client", "models", "cache", "browser"]

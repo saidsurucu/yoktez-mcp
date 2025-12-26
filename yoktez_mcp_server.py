@@ -4,8 +4,7 @@ import atexit
 import logging
 import os
 from pydantic import HttpUrl, Field
-from typing import Optional, Dict, List, Any
-import urllib.parse
+from typing import Optional
 
 # Logging Configuration
 LOG_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
@@ -26,11 +25,11 @@ root_logger.addHandler(console_handler)
 logger = logging.getLogger(__name__)
 # --- Logging Configuration End ---
 
-from fastmcp import FastMCP # Assuming this library is available
+from fastmcp import FastMCP  # noqa: E402
 
 # Corrected imports: client and models are in the same directory
-from client import YokTezApiClient
-from models import (
+from client import YokTezApiClient  # noqa: E402
+from models import (  # noqa: E402
     YokTezSearchRequest, YokTezSearchResult,
     YokTezDocumentRequest, YokTezDocumentMarkdown,
     YokTezThesisTypeEnum, YokTezPermissionStatusEnum, YokTezStatusEnum,
@@ -39,32 +38,31 @@ from models import (
 
 app = FastMCP(
     name="YokTezMCP",
-    instructions="MCP server for YÖK National Thesis Center. Allows detailed searching of theses and retrieving their PDF content as paginated Markdown (page by PDF page).",
-    dependencies=["httpx", "beautifulsoup4", "playwright", "pypdf", "markitdown", "pydantic"]
+    instructions="MCP server for YÖK National Thesis Center. Allows detailed searching of theses and retrieving their PDF content as paginated Markdown (page by PDF page)."
 )
 
 yoktez_client_instance = YokTezApiClient(playwright_headless=True)
 
 @app.tool()
 async def search_yok_tez_detailed(
-    tez_ad: Optional[str] = Field(None, description="Thesis title to search for. E.g., 'artificial intelligence', 'climate change impacts'."),
-    yazar_ad_soyad: Optional[str] = Field(None, description="Author's name and surname. YÖK system might be case-sensitive; typically uppercase. E.g., 'AYŞE YILMAZ'."),
-    danisman_ad_soyad: Optional[str] = Field(None, description="Advisor's name and surname. Typically uppercase. E.g., 'MEHMET ÖZTÜRK'."),
-    universite_ad: Optional[str] = Field(None, description="University name to filter by. E.g., 'İstanbul Üniversitesi'."),
-    enstitu_ad: Optional[str] = Field(None, description="Institute name to filter by. E.g., 'Sosyal Bilimler Enstitüsü'."),
-    anabilim_dal_ad: Optional[str] = Field(None, description="Main discipline name. E.g., 'İşletme'."),
-    bilim_dal_ad: Optional[str] = Field(None, description="Specific discipline name. E.g., 'Pazarlama'."),
-    tez_no: Optional[str] = Field(None, description="Specific thesis number."),
-    konu_basliklari: Optional[str] = Field(None, description="Subject headings or keywords."),
-    dizin_terimleri: Optional[str] = Field(None, description="Index terms."),
-    ozet_metni: Optional[str] = Field(None, description="Text to search within the thesis abstract."),
-    tez_turu: Optional[YokTezThesisTypeEnum] = Field(default=YokTezThesisTypeEnum.SECINIZ, description="Type of thesis."),
-    izin_durumu: Optional[YokTezPermissionStatusEnum] = Field(default=YokTezPermissionStatusEnum.SECINIZ, description="PDF access permission status."),
-    tez_durumu: Optional[YokTezStatusEnum] = Field(default=YokTezStatusEnum.ONAYLANDI, description="Approval status of the thesis."),
-    dil: Optional[YokTezLanguageEnum] = Field(default=YokTezLanguageEnum.SECINIZ, description="Language of the thesis."),
-    enstitu_grubu: Optional[YokTezInstituteGroupEnum] = Field(default=YokTezInstituteGroupEnum.SECINIZ, description="Group of the institute."),
-    yil_baslangic: Optional[str] = Field(default="0", description="Start year for the search range (e.g., '2010'). '0' means not selected."),
-    yil_bitis: Optional[str] = Field(default="0", description="End year for the search range (e.g., '2023'). '0' means not selected."),
+    thesis_title: Optional[str] = Field(None, description="Thesis title to search for. E.g., 'artificial intelligence', 'climate change impacts'."),
+    author_name: Optional[str] = Field(None, description="Author's name and surname. YÖK system might be case-sensitive; typically uppercase. E.g., 'AYŞE YILMAZ'."),
+    advisor_name: Optional[str] = Field(None, description="Advisor's name and surname. Typically uppercase. E.g., 'MEHMET ÖZTÜRK'."),
+    university_name: Optional[str] = Field(None, description="University name to filter by. E.g., 'İstanbul Üniversitesi'."),
+    institute_name: Optional[str] = Field(None, description="Institute name to filter by. E.g., 'Sosyal Bilimler Enstitüsü'."),
+    department_name: Optional[str] = Field(None, description="Main discipline/department name. E.g., 'İşletme'."),
+    discipline_name: Optional[str] = Field(None, description="Specific discipline name. E.g., 'Pazarlama'."),
+    thesis_number: Optional[str] = Field(None, description="Specific thesis number."),
+    subject_headings: Optional[str] = Field(None, description="Subject headings or keywords."),
+    index_terms: Optional[str] = Field(None, description="Index terms."),
+    abstract_text: Optional[str] = Field(None, description="Text to search within the thesis abstract."),
+    thesis_type: Optional[YokTezThesisTypeEnum] = Field(default=YokTezThesisTypeEnum.SECINIZ, description="Type of thesis."),
+    permission_status: Optional[YokTezPermissionStatusEnum] = Field(default=YokTezPermissionStatusEnum.SECINIZ, description="PDF access permission status."),
+    thesis_status: Optional[YokTezStatusEnum] = Field(default=YokTezStatusEnum.ONAYLANDI, description="Approval status of the thesis."),
+    language: Optional[YokTezLanguageEnum] = Field(default=YokTezLanguageEnum.SECINIZ, description="Language of the thesis."),
+    institute_group: Optional[YokTezInstituteGroupEnum] = Field(default=YokTezInstituteGroupEnum.SECINIZ, description="Group of the institute."),
+    year_start: Optional[str] = Field(default="0", description="Start year for the search range (e.g., '2010'). '0' means not selected."),
+    year_end: Optional[str] = Field(default="0", description="End year for the search range (e.g., '2023'). '0' means not selected."),
     page: int = Field(default=1, ge=1, description="Page number of the search results."),
     results_per_page: int = Field(default=10, ge=1, le=20, description="Number of results to display per page.")
 ) -> YokTezSearchResult:
@@ -75,11 +73,11 @@ async def search_yok_tez_detailed(
     This tool accepts text for these fields. YÖK's backend might perform a text-based search or use defaults if exact matches for IDs aren't found via text.
     """
     search_req = YokTezSearchRequest(
-        tez_ad=tez_ad, yazar_ad_soyad=yazar_ad_soyad, danisman_ad_soyad=danisman_ad_soyad,
-        universite_ad=universite_ad, enstitu_ad=enstitu_ad, anabilim_dal_ad=anabilim_dal_ad, bilim_dal_ad=bilim_dal_ad,
-        tez_no=tez_no, konu_basliklari=konu_basliklari, dizin_terimleri=dizin_terimleri, ozet_metni=ozet_metni,
-        tez_turu=tez_turu, izin_durumu=izin_durumu, tez_durumu=tez_durumu, dil=dil, enstitu_grubu=enstitu_grubu,
-        yil_baslangic=yil_baslangic, yil_bitis=yil_bitis,
+        tez_ad=thesis_title, yazar_ad_soyad=author_name, danisman_ad_soyad=advisor_name,
+        universite_ad=university_name, enstitu_ad=institute_name, anabilim_dal_ad=department_name, bilim_dal_ad=discipline_name,
+        tez_no=thesis_number, konu_basliklari=subject_headings, dizin_terimleri=index_terms, ozet_metni=abstract_text,
+        tez_turu=thesis_type, izin_durumu=permission_status, tez_durumu=thesis_status, dil=language, enstitu_grubu=institute_group,
+        yil_baslangic=year_start, yil_bitis=year_end,
         page=page, limit_per_page=results_per_page
     )
     log_params = search_req.model_dump(exclude_defaults=True)
@@ -173,7 +171,7 @@ def main():
         app.run() # FastMCP's run method
     except KeyboardInterrupt:
         logger.info(f"{app.name} server shut down by user (KeyboardInterrupt).")
-    except Exception as e:
+    except Exception:  # noqa: BLE001
         logger.exception(f"{app.name} server failed to start or crashed.")
     # perform_cleanup() will be called by atexit, no need to call explicitly here in finally.
     # finally:
