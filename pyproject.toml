@@ -16,7 +16,6 @@ dependencies = [
     "httpx[http2]>=0.28.1",
     "lxml>=5.4.0",
     "markitdown[pdf]>=0.1.1",
-    "playwright>=1.52.0",
     "pydantic>=2.11.4",
     "pypdf>=5.5.0",
 ]
@@ -25,4 +24,4 @@ dependencies = [
 yoktez-mcp = "yoktez_mcp_server:main"
 
 [tool.setuptools]
-py-modules = ["yoktez_mcp_server", "client", "models", "cache", "browser"]
+py-modules = ["yoktez_mcp_server", "client", "models", "cache"]

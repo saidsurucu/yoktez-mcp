@@ -41,7 +41,7 @@ app = FastMCP(
     instructions="MCP server for YÖK National Thesis Center. Allows detailed searching of theses and retrieving their PDF content as paginated Markdown (page by PDF page)."
 )
 
-yoktez_client_instance = YokTezApiClient(playwright_headless=True)
+yoktez_client_instance = YokTezApiClient()
 
 @app.tool()
 async def search_yok_tez_detailed(

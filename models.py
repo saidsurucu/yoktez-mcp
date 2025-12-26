@@ -92,6 +92,7 @@ class YokTezCompactThesisDetail(BaseModel):
     thesis_type: Optional[str] = Field(None, description="Type of thesis (e.g., Master's, PhD), parsed from JS.")
     subject: Optional[str] = Field(None, description="Subject(s) of the thesis, often ;-separated, parsed from JS.")
     thesis_key: Optional[str] = Field(None, description="Internal YÖK key for the thesis, used to construct detail_page_url.")
+    encrypted_no: Optional[str] = Field(None, description="Encrypted thesis number for detail page access (second parameter of tezDetay).")
     detail_page_url: Optional[HttpUrl] = Field(None, description="URL to the thesis detail page on YÖK Tez Merkezi.")
 
 class YokTezSearchResult(BaseModel):
