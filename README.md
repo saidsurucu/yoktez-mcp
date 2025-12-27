@@ -19,23 +19,44 @@ Bu proje, Yükseköğretim Kurulu (YÖK) Ulusal Tez Merkezi'ne erişimi kolayla�
 
 ---
 
-🚀 **5 Dakikada Başla (Remote MCP)**
+## 🚀 5 Dakikada Başla (Remote MCP)
 
-✅ **Kurulum Gerektirmez! Hemen Kullan!**
+### ✅ Kurulum Gerektirmez! Hemen Kullan!
 
 🔗 **Remote MCP Adresi:** `https://yoktezmcp.fastmcp.app/mcp`
 
-**Claude Desktop ile Kullanım**
+### Claude Desktop ile Kullanım
 
-1. Claude Desktop'ı açın
+1. **Claude Desktop'ı açın**
 2. **Settings → Connectors → Add Custom Connector**
-3. Bilgileri girin:
+3. **Bilgileri girin:**
    - **Name:** `YokTez MCP`
    - **URL:** `https://yoktezmcp.fastmcp.app/mcp`
 4. **Add** butonuna tıklayın
-5. Hemen kullanmaya başlayın! 🎉
+5. **Hemen kullanmaya başlayın!** 🎉
 
-💡 **İpucu:** Remote MCP sayesinde Python, uv veya herhangi bir kurulum yapmadan doğrudan Claude Desktop üzerinden YÖK Ulusal Tez Merkezi'ne erişebilirsiniz!
+### Google Antigravity ile Kullanım
+
+1. **Agent session** açın ve editörün yan panelindeki **"…"** dropdown menüsüne tıklayın
+2. **MCP Servers** seçeneğini seçin - MCP Store açılacak
+3. Üstteki **Manage MCP Servers** butonuna tıklayın
+4. **View raw config** seçeneğine tıklayın
+5. `mcp_config.json` dosyasına aşağıdaki yapılandırmayı ekleyin:
+
+```json
+{
+  "mcpServers": {
+    "yoktez-mcp": {
+      "serverUrl": "https://yoktezmcp.fastmcp.app/mcp/",
+      "headers": {
+        "Content-Type": "application/json"
+      }
+    }
+  }
+}
+```
+
+> 💡 **İpucu:** Remote MCP sayesinde Python, uv veya herhangi bir kurulum yapmadan doğrudan Claude Desktop üzerinden YÖK Ulusal Tez Merkezi'ne erişebilirsiniz!
 
 ---
 
