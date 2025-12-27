@@ -18,6 +18,27 @@ Bu proje, Yükseköğretim Kurulu (YÖK) Ulusal Tez Merkezi'ne erişimi kolayla�
 * YokTez MCP [5ire](https://5ire.app) gibi Claude Desktop haricindeki MCP istemcilerini de destekler.
 
 ---
+
+🚀 **5 Dakikada Başla (Remote MCP)**
+
+✅ **Kurulum Gerektirmez! Hemen Kullan!**
+
+🔗 **Remote MCP Adresi:** `https://yoktezmcp.fastmcp.app/mcp`
+
+**Claude Desktop ile Kullanım**
+
+1. Claude Desktop'ı açın
+2. **Settings → Connectors → Add Custom Connector**
+3. Bilgileri girin:
+   - **Name:** `YokTez MCP`
+   - **URL:** `https://yoktezmcp.fastmcp.app/mcp`
+4. **Add** butonuna tıklayın
+5. Hemen kullanmaya başlayın! 🎉
+
+💡 **İpucu:** Remote MCP sayesinde Python, uv veya herhangi bir kurulum yapmadan doğrudan Claude Desktop üzerinden YÖK Ulusal Tez Merkezi'ne erişebilirsiniz!
+
+---
+
 🚀 **Claude Haricindeki Modellerle Kullanmak İçin Çok Kolay Kurulum (Örnek: 5ire için)**
 
 Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istemcileriyle kullanmak isteyenler içindir.
