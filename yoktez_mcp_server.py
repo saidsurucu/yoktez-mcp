@@ -7,23 +7,11 @@ from pydantic import HttpUrl, Field
 from typing import Optional
 
 # Logging Configuration
-LOG_DIRECTORY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
-if not os.path.exists(LOG_DIRECTORY):
-    os.makedirs(LOG_DIRECTORY)
-LOG_FILE_PATH = os.path.join(LOG_DIRECTORY, "yoktez_mcp_server.log")
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.DEBUG)
-log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(threadName)s - %(message)s')
-file_handler = logging.FileHandler(LOG_FILE_PATH, mode='a', encoding='utf-8')
-file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.DEBUG)
-root_logger.addHandler(file_handler)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(log_formatter)
-console_handler.setLevel(logging.INFO)
-root_logger.addHandler(console_handler)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
-# --- Logging Configuration End ---
 
 from fastmcp import FastMCP  # noqa: E402
 
@@ -41,7 +29,9 @@ app = FastMCP(
     instructions="MCP server for YÖK National Thesis Center. Allows detailed searching of theses and retrieving their PDF content as paginated Markdown (page by PDF page)."
 )
 
-yoktez_client_instance = YokTezApiClient()
+# Disk cache only if explicitly enabled via env var (disabled by default for read-only containers)
+enable_disk_cache = os.environ.get('YOKTEZ_ENABLE_DISK_CACHE', '').lower() == 'true'
+yoktez_client_instance = YokTezApiClient(enable_disk_cache=enable_disk_cache)
 
 @app.tool()
 async def search_yok_tez_detailed(
@@ -165,8 +155,7 @@ def perform_cleanup():
 atexit.register(perform_cleanup)
 
 def main():
-    logger.info(f"Starting {app.name} server via main() function...")
-    logger.info(f"Logs will be written to: {LOG_FILE_PATH}")
+    logger.info(f"Starting {app.name} server...")
     try:
         app.run() # FastMCP's run method
     except KeyboardInterrupt:
