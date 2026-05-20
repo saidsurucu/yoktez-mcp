@@ -21,6 +21,7 @@ from models import (
     YokTezDocumentRequest, YokTezDocumentMarkdown, InternalThesisDetail,
     YokTezThesisDetailsRequest, YokTezThesisDetails, YokTezKeywordPair,
     YokTezRecentListRequest, YokTezRecentListMode,
+    YokTezAnabilimDali, YokTezAnabilimDaliListResult, YokTezAnabilimDaliSearchRequest,
 )
 from cache import MultiTierCache, AIOFILES_AVAILABLE
 
@@ -46,6 +47,11 @@ class YokTezApiClient:
     YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezDetay.jsp?id={{thesis_key}}&no={{encrypted_no}}"
     YOK_TEZ_BILGI_DETAY_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezBilgiDetay.jsp"
     YOK_TEZ_ISLEMLERI_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/TezIslemleri"
+    YOK_TEZ_ALL_ABD_URL = (
+        f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tarama.jsp?ajax=getAllABD&ensGrubu="
+    )
+    # Cap on how many departments are searched-and-merged in a single advanced search.
+    MAX_ABD_PER_SEARCH = 15
 
     def __init__(
         self,
@@ -102,6 +108,12 @@ class YokTezApiClient:
             }
         )
         self._md_converter = MarkItDown()
+
+        # Lazily-loaded cache of YÖK's full department (anabilim dalı) list.
+        # The list is large (~2500 entries) but effectively static, so it is
+        # fetched once per process and reused.
+        self._abd_list_cache: Optional[List[YokTezAnabilimDali]] = None
+        self._abd_list_lock = asyncio.Lock()
 
     async def close_client_session(self):
         """Closes the HTTPX client session and clears cache."""
@@ -519,9 +531,15 @@ class YokTezApiClient:
 
         soup = BeautifulSoup(page_source, "lxml")
 
-        warning_div = soup.find("div", class_="result-limit-warning") or soup.find(
-            "div", class_="warning-text"
-        )
+        # The count banner lives in different classes across YÖK layouts, and an empty
+        # template div of one class can precede the populated one — so pick the first
+        # candidate that actually has text.
+        warning_div = None
+        for _cls in ("result-count-text", "result-limit-warning", "warning-text"):
+            _cand = soup.find("div", class_=_cls)
+            if _cand and _cand.get_text(strip=True):
+                warning_div = _cand
+                break
         warning_text = warning_div.get_text(" ", strip=True) if warning_div else ""
 
         total_results_on_yok: Optional[int] = None
@@ -585,6 +603,223 @@ class YokTezApiClient:
             current_page=request_page,
             total_pages=total_pages,
             query_used_parameters=query_params,
+            error_message=error_msg,
+        )
+
+    # --- Anabilim Dalı (department) list + advanced search (islem=2) ---
+
+    @staticmethod
+    def _tr_upper(text: str) -> str:
+        """Uppercase with Turkish rules (i→İ, ı→I) for case-insensitive matching."""
+        return text.replace("i", "İ").replace("ı", "I").upper()
+
+    async def get_anabilim_dali_list(
+        self, force_refresh: bool = False
+    ) -> List[YokTezAnabilimDali]:
+        """Fetch (and cache) YÖK's full list of departments (anabilim dalı).
+
+        Parses name+code pairs from YÖK's getAllABD endpoint. Cached for the
+        process lifetime since the list rarely changes.
+        """
+        if self._abd_list_cache is not None and not force_refresh:
+            return self._abd_list_cache
+        async with self._abd_list_lock:
+            if self._abd_list_cache is not None and not force_refresh:
+                return self._abd_list_cache
+            logger.info("[ABD] Fetching full department list from YÖK...")
+            await self._http_client.get(
+                self.YOK_TEZ_SEARCH_PAGE_URL, timeout=self._request_timeout
+            )
+            response = await self._http_client.get(
+                self.YOK_TEZ_ALL_ABD_URL, timeout=self._request_timeout
+            )
+            response.raise_for_status()
+            pairs = re.findall(r'ad="([^"]+)"\s+kod="(\d+)"', response.text)
+            seen: set = set()
+            items: List[YokTezAnabilimDali] = []
+            for name, code in pairs:
+                if code in seen:
+                    continue
+                seen.add(code)
+                items.append(YokTezAnabilimDali(code=code, name=name.strip()))
+            self._abd_list_cache = items
+            logger.info("[ABD] Cached %d departments.", len(items))
+            return items
+
+    async def search_anabilim_dali(
+        self, keyword: str, max_results: int = 50
+    ) -> YokTezAnabilimDaliListResult:
+        """Search YÖK's department list for names containing the given keyword."""
+        kw = (keyword or "").strip()
+        if not kw:
+            return YokTezAnabilimDaliListResult(
+                keyword=keyword, error_message="A non-empty keyword is required."
+            )
+        try:
+            all_items = await self.get_anabilim_dali_list()
+        except Exception as exc:
+            logger.exception("[ABD] Failed to fetch department list")
+            return YokTezAnabilimDaliListResult(
+                keyword=keyword, error_message=f"Could not fetch department list: {exc}"
+            )
+        needle = self._tr_upper(kw)
+        matches = [i for i in all_items if needle in self._tr_upper(i.name)]
+        result = YokTezAnabilimDaliListResult(
+            matches=matches[: max(1, max_results)],
+            total_matches=len(matches),
+            returned=min(len(matches), max(1, max_results)),
+            keyword=keyword,
+        )
+        if not matches:
+            result.error_message = f"No department names contain '{keyword}'."
+        return result
+
+    @staticmethod
+    def _build_advanced_search_form_data(
+        request: YokTezAnabilimDaliSearchRequest, abd_code: str
+    ) -> Dict[str, str]:
+        """Build the GForm (advanced, islem=2) payload for a single department code.
+
+        Empty Enstitu/yil values MUST be sent as '0' — YÖK's Bul button normalises
+        them to 0 before submit, and the server rejects empty values
+        ("Geçersiz sorgulama").
+        """
+        return {
+            "uniad": "", "Universite": "", "uni_yoksis_id": "", "source": "TR",
+            "ensad": "", "Enstitu": "0", "ens_grubu": "",
+            "abdad": "", "ABD": abd_code,
+            "Konu": "",
+            "Tur": request.tez_turu.value,
+            "yil1": request.yil_baslangic or "0",
+            "yil2": request.yil_bitis or "0",
+            "izin": request.izin_durumu.value,
+            "Durum": request.tez_durumu.value,
+            "TezAd": request.tez_adi or "",
+            "Dil": request.dil.value,
+            "AdSoyad": request.yazar or "",
+            "DanismanAdSoyad": request.danisman or "",
+            "Dizin": request.dizin_terimleri or "",
+            "TezNo": "",
+            "Bolum": "0",
+            "islem": "2",
+            "-find": "  Bul",
+        }
+
+    async def _post_advanced_search(self, form_data: Dict[str, str]) -> str:
+        """POST one advanced search and return the result HTML (session established first)."""
+        await self._http_client.get(
+            self.YOK_TEZ_SEARCH_PAGE_URL, timeout=self._request_timeout
+        )
+        response = await self._http_client.post(
+            self.YOK_TEZ_SEARCH_ACTION_URL,
+            data=form_data,
+            timeout=self._request_timeout,
+            headers={
+                "Referer": self.YOK_TEZ_SEARCH_PAGE_URL,
+                "Origin": self.YOK_TEZ_BASE_URL,
+            },
+        )
+        response.raise_for_status()
+        return response.text
+
+    async def search_theses_by_anabilim_dali(
+        self, request: YokTezAnabilimDaliSearchRequest
+    ) -> YokTezSearchResult:
+        """Advanced search (islem=2) filtered by one or more department codes.
+
+        Each code is searched separately and the resulting theses are merged and
+        deduplicated. Pagination is applied client-side over the merged list.
+        """
+        params_dict = request.model_dump(exclude_defaults=True, mode="json")
+        codes = [c.strip() for c in request.anabilim_dali_kodlari if c and c.strip()]
+        if not codes:
+            return YokTezSearchResult(
+                theses=[], total_results_found=0, results_in_batch=0,
+                current_page=request.page, total_pages=0,
+                query_used_parameters=params_dict,
+                error_message="No department codes provided.",
+            )
+        if len(codes) > self.MAX_ABD_PER_SEARCH:
+            return YokTezSearchResult(
+                theses=[], current_page=request.page,
+                query_used_parameters=params_dict,
+                error_message=(
+                    f"Too many department codes ({len(codes)}). Provide at most "
+                    f"{self.MAX_ABD_PER_SEARCH}; narrow your selection."
+                ),
+            )
+
+        logger.info("[ABD-SEARCH] Searching %d department(s): %s", len(codes), codes)
+        merged: List[YokTezCompactThesisDetail] = []
+        seen_keys: set = set()
+        total_reported = 0
+        errors: List[str] = []
+
+        for code in codes:
+            form_data = self._build_advanced_search_form_data(request, code)
+            try:
+                html = await self._post_advanced_search(form_data)
+            except Exception as exc:
+                logger.error("[ABD-SEARCH] code=%s failed: %s", code, exc)
+                errors.append(f"code {code}: {exc}")
+                continue
+            if "Geçersiz sorgulama" in html:
+                logger.error("[ABD-SEARCH] code=%s rejected by YÖK (Geçersiz sorgulama).", code)
+                errors.append(f"code {code}: rejected by YÖK")
+                continue
+            partial = self._build_listing_from_html(
+                page_source=html, request_page=1, limit_per_page=10_000,
+                query_params=params_dict,
+            )
+            if partial.total_results_found:
+                total_reported += partial.total_results_found
+            for thesis in partial.theses:
+                key = (
+                    thesis.thesis_key or thesis.encrypted_no
+                    or thesis.thesis_no or f"_idx_{id(thesis)}"
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                merged.append(thesis)
+
+        if not merged and errors:
+            return YokTezSearchResult(
+                theses=[], current_page=request.page,
+                query_used_parameters=params_dict,
+                error_message="; ".join(errors),
+            )
+
+        results_in_batch = len(merged)
+        total_pages = (
+            math.ceil(results_in_batch / request.limit_per_page)
+            if results_in_batch else 0
+        )
+        start = (request.page - 1) * request.limit_per_page
+        end = start + request.limit_per_page
+        paginated = merged[start:end]
+
+        error_msg: Optional[str] = None
+        if not merged:
+            error_msg = "No theses found for the given department(s) and filters."
+        elif not paginated and request.page > 1:
+            error_msg = (
+                f"Page {request.page} is beyond the available results "
+                f"({total_pages} pages)."
+            )
+        if errors:
+            error_msg = (
+                (error_msg + "; " if error_msg else "")
+                + "Some departments failed: " + "; ".join(errors)
+            )
+
+        return YokTezSearchResult(
+            theses=paginated,
+            total_results_found=total_reported or results_in_batch,
+            results_in_batch=results_in_batch,
+            current_page=request.page,
+            total_pages=total_pages,
+            query_used_parameters=params_dict,
             error_message=error_msg,
         )
 

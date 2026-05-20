@@ -322,6 +322,81 @@ class YokTezRecentListRequest(BaseModel):
     )
 
 
+class YokTezAnabilimDali(BaseModel):
+    """A single 'Anabilim Dalı' (academic department/discipline) option on YÖK.
+
+    These come from YÖK's advanced-search department list. The 'code' is YÖK's
+    internal numeric id used to filter searches; the 'name' is the full Turkish
+    department title (e.g. 'KAMU HUKUKU ANABİLİM DALI').
+    """
+    code: str = Field(description="YÖK internal department code, used as the ABD filter value.")
+    name: str = Field(description="Full department name (Turkish), e.g. 'KAMU HUKUKU ANABİLİM DALI'.")
+
+
+class YokTezAnabilimDaliListResult(BaseModel):
+    """Result of searching YÖK's department (anabilim dalı) list by keyword."""
+    matches: List[YokTezAnabilimDali] = Field(
+        default_factory=list,
+        description="Departments whose name contains the keyword (name + code pairs).",
+    )
+    total_matches: int = Field(
+        0, description="Total number of departments matching the keyword."
+    )
+    returned: int = Field(
+        0, description="Number of matches actually returned (may be capped by max_results)."
+    )
+    keyword: Optional[str] = Field(
+        None, description="The keyword that was matched against department names."
+    )
+    error_message: Optional[str] = Field(
+        None, description="Error message if the list could not be fetched or no match was found."
+    )
+
+
+class YokTezAnabilimDaliSearchRequest(BaseModel):
+    """Request for YÖK's advanced (islem=2) search filtered by one or more departments.
+
+    Unlike the keyword search, this path filters by 'Anabilim Dalı' (department) and
+    does NOT support a free full-text/abstract keyword. It DOES support filtering by
+    thesis title, author, advisor and index terms, plus the usual dropdown filters.
+    When multiple department codes are given, each is searched and the results merged
+    (deduplicated by thesis).
+    """
+    anabilim_dali_kodlari: List[str] = Field(
+        ...,
+        min_length=1,
+        description="One or more YÖK department codes (from list_yok_tez_anabilim_dali). Each is searched and results merged.",
+    )
+    tez_adi: Optional[str] = Field(None, description="Optional: filter by words in the thesis title.")
+    yazar: Optional[str] = Field(None, description="Optional: filter by author name.")
+    danisman: Optional[str] = Field(None, description="Optional: filter by advisor name.")
+    dizin_terimleri: Optional[str] = Field(None, description="Optional: filter by index/keyword terms.")
+    tez_turu: YokTezThesisTypeEnum = Field(
+        default=YokTezThesisTypeEnum.SECINIZ, description="Filter by thesis type."
+    )
+    izin_durumu: YokTezPermissionStatusEnum = Field(
+        default=YokTezPermissionStatusEnum.SECINIZ,
+        description="Filter by PDF access permission (İzinli / İzinsiz).",
+    )
+    tez_durumu: YokTezStatusEnum = Field(
+        default=YokTezStatusEnum.ONAYLANDI,
+        description="Filter by approval status. Defaults to 'Onaylandı' (approved).",
+    )
+    dil: YokTezLanguageEnum = Field(
+        default=YokTezLanguageEnum.SECINIZ, description="Filter by thesis language."
+    )
+    yil_baslangic: str = Field(
+        default="0", description="Start year (e.g. '2020'). '0' = no lower bound."
+    )
+    yil_bitis: str = Field(
+        default="0", description="End year (e.g. '2025'). '0' = no upper bound."
+    )
+    page: int = Field(default=1, ge=1, description="Page number of the merged results.")
+    limit_per_page: int = Field(
+        default=10, ge=1, le=50, description="Maximum number of results per page."
+    )
+
+
 class YokTezKeywordPair(BaseModel):
     """A bilingual keyword pair as returned by YÖK ('TR = EN' format)."""
     tr: Optional[str] = Field(None, description="Turkish keyword/term.")

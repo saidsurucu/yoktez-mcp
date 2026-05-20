@@ -4,7 +4,7 @@ import atexit
 import logging
 import os
 from pydantic import HttpUrl, Field
-from typing import Optional
+from typing import List, Optional
 
 # Logging Configuration
 logging.basicConfig(
@@ -25,6 +25,7 @@ from models import (  # noqa: E402
     YokTezThesisTypeEnum, YokTezPermissionStatusEnum, YokTezStatusEnum,
     YokTezLanguageEnum, YokTezSearchFieldEnum, YokTezMatchTypeEnum,
     YokTezOperatorEnum,
+    YokTezAnabilimDaliListResult, YokTezAnabilimDaliSearchRequest,
 )
 
 app = FastMCP(
@@ -221,6 +222,133 @@ async def list_recent_yok_tez(
         return result
     except Exception as exc:
         logger.exception("Error in tool 'list_recent_yok_tez'.")
+        return YokTezSearchResult(
+            theses=[],
+            current_page=page,
+            query_used_parameters=log_params,
+            error_message=f"Unexpected error: {exc}",
+        )
+
+
+@app.tool()
+async def list_yok_tez_anabilim_dali(
+    keyword: str = Field(
+        ...,
+        description=(
+            "A word to look for inside department (anabilim dalı) names, e.g. 'hukuk', "
+            "'bilgisayar', 'tarih'. Matching is case-insensitive and Turkish-aware."
+        ),
+    ),
+    max_results: int = Field(
+        default=50, ge=1, le=200,
+        description="Maximum number of matching departments to return.",
+    ),
+) -> YokTezAnabilimDaliListResult:
+    """Find YÖK departments (Anabilim Dalı) whose name contains a keyword.
+
+    YÖK's regular keyword search canNOT search inside department names. Use this tool
+    first to discover the relevant departments and their codes, then pass the codes you
+    want to 'search_yok_tez_by_anabilim_dali' to retrieve theses from those departments.
+
+    Example: keyword='hukuk' returns departments like 'KAMU HUKUKU ANABİLİM DALI'
+    (code 41), 'TİCARET HUKUKU ANABİLİM DALI' (code 906), etc. The LLM can then pick
+    one or several codes to search.
+    """
+    logger.info(f"Tool 'list_yok_tez_anabilim_dali' called with keyword={keyword!r}")
+    try:
+        return await yoktez_client_instance.search_anabilim_dali(keyword, max_results)
+    except Exception as exc:
+        logger.exception("Error in tool 'list_yok_tez_anabilim_dali'.")
+        return YokTezAnabilimDaliListResult(
+            keyword=keyword, error_message=f"Unexpected error: {exc}"
+        )
+
+
+@app.tool()
+async def search_yok_tez_by_anabilim_dali(
+    anabilim_dali_codes: List[str] = Field(
+        ...,
+        description=(
+            "One or more department codes obtained from 'list_yok_tez_anabilim_dali'. "
+            "Each code is searched and the results are merged and deduplicated. "
+            f"At most {YokTezApiClient.MAX_ABD_PER_SEARCH} codes per call."
+        ),
+    ),
+    thesis_title: Optional[str] = Field(
+        None, description="Optional: only theses whose title contains these words."
+    ),
+    author_name: Optional[str] = Field(
+        None, description="Optional: filter by author name."
+    ),
+    advisor_name: Optional[str] = Field(
+        None, description="Optional: filter by advisor name."
+    ),
+    index_terms: Optional[str] = Field(
+        None, description="Optional: filter by index/keyword terms."
+    ),
+    thesis_type: YokTezThesisTypeEnum = Field(
+        default=YokTezThesisTypeEnum.SECINIZ, description="Filter by thesis type."
+    ),
+    permission_status: YokTezPermissionStatusEnum = Field(
+        default=YokTezPermissionStatusEnum.SECINIZ,
+        description="Filter by PDF access permission (İzinli / İzinsiz).",
+    ),
+    thesis_status: YokTezStatusEnum = Field(
+        default=YokTezStatusEnum.ONAYLANDI,
+        description="Filter by approval status. Defaults to 'Onaylandı' (approved).",
+    ),
+    language: YokTezLanguageEnum = Field(
+        default=YokTezLanguageEnum.SECINIZ, description="Filter by thesis language."
+    ),
+    year_start: str = Field(
+        default="0", description="Start year (e.g. '2020'). '0' = no lower bound."
+    ),
+    year_end: str = Field(
+        default="0", description="End year (e.g. '2025'). '0' = no upper bound."
+    ),
+    page: int = Field(default=1, ge=1, description="Page number of the merged results."),
+    results_per_page: int = Field(
+        default=10, ge=1, le=50, description="Number of results to display per page."
+    ),
+) -> YokTezSearchResult:
+    """Search YÖK theses filtered by department (Anabilim Dalı) code(s).
+
+    This uses YÖK's advanced search path, which filters by department. Unlike
+    'search_yok_tez_detailed', it does NOT support a free full-text/abstract keyword —
+    but it DOES support filtering by thesis title, author, advisor and index terms,
+    plus the usual type/language/permission/status/year filters.
+
+    Workflow:
+      1. Call 'list_yok_tez_anabilim_dali' with a keyword (e.g. 'hukuk') to get codes.
+      2. Pass the chosen code(s) here. Multiple codes are searched and merged.
+
+    Note: YÖK caps each department's result batch at ~2000; 'total_results_found'
+    reflects YÖK's reported totals while 'results_in_batch' is what was actually fetched.
+    """
+    req = YokTezAnabilimDaliSearchRequest(
+        anabilim_dali_kodlari=anabilim_dali_codes,
+        tez_adi=thesis_title,
+        yazar=author_name,
+        danisman=advisor_name,
+        dizin_terimleri=index_terms,
+        tez_turu=thesis_type,
+        izin_durumu=permission_status,
+        tez_durumu=thesis_status,
+        dil=language,
+        yil_baslangic=year_start,
+        yil_bitis=year_end,
+        page=page,
+        limit_per_page=results_per_page,
+    )
+    log_params = req.model_dump(exclude_defaults=True, mode="json")
+    logger.info(f"Tool 'search_yok_tez_by_anabilim_dali' called with {log_params}")
+    try:
+        result = await yoktez_client_instance.search_theses_by_anabilim_dali(req)
+        if result.query_used_parameters is None:
+            result.query_used_parameters = log_params
+        return result
+    except Exception as exc:
+        logger.exception("Error in tool 'search_yok_tez_by_anabilim_dali'.")
         return YokTezSearchResult(
             theses=[],
             current_page=page,
