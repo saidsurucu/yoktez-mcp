@@ -47,8 +47,11 @@ class YokTezApiClient:
     YOK_TEZ_BASE_URL = "https://tez.yok.gov.tr"
     YOK_TEZ_SEARCH_PAGE_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tarama.jsp"
     YOK_TEZ_SEARCH_ACTION_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/SearchTez"
-    YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezDetay.jsp?id={{thesis_key}}&no={{encrypted_no}}"
     YOK_TEZ_BILGI_DETAY_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezBilgiDetay.jsp"
+    # The 2026 site has no per-thesis HTML page (the old tezDetay.jsp now 404s), so the
+    # detail_page_url we emit is the tezBilgiDetay.jsp metadata endpoint, which resolves
+    # with a plain GET and carries both IDs.
+    YOK_TEZ_DETAIL_URL_TEMPLATE = f"{YOK_TEZ_BILGI_DETAY_URL}?kayitNo={{thesis_key}}&tezNo={{encrypted_no}}"
     YOK_TEZ_GET_PDF_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/getTezPdf.jsp"
     YOK_TEZ_ISLEMLERI_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/TezIslemleri"
     YOK_TEZ_ALL_ABD_URL = (
@@ -283,7 +286,7 @@ class YokTezApiClient:
                 yer_raw = (meta.get("yer") or "").strip()
                 university_info = re.sub(r"\s*/\s*$", "", yer_raw) if yer_raw else None
 
-                detail_page_url_str = self.YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE.format(
+                detail_page_url_str = self.YOK_TEZ_DETAIL_URL_TEMPLATE.format(
                     thesis_key=kayit_no, encrypted_no=tez_no_enc
                 )
 
@@ -823,11 +826,15 @@ class YokTezApiClient:
         return pairs
 
     def _extract_ids_from_detail_url(self, url: str) -> tuple[Optional[str], Optional[str]]:
-        """Pull thesis_key (id) and encrypted_no (no) out of a tezDetay.jsp URL."""
+        """Pull thesis_key and encrypted_no out of a detail_page_url.
+
+        Accepts the current tezBilgiDetay.jsp/getTezPdf.jsp form (kayitNo/tezNo) as well as
+        legacy tezDetay.jsp URLs (id/no) that clients may still hold.
+        """
         parsed = urllib.parse.urlparse(url)
         qs = urllib.parse.parse_qs(parsed.query)
-        thesis_key = (qs.get("id") or [None])[0]
-        encrypted_no = (qs.get("no") or [None])[0]
+        thesis_key = (qs.get("kayitNo") or qs.get("id") or [None])[0]
+        encrypted_no = (qs.get("tezNo") or qs.get("no") or [None])[0]
         return thesis_key, encrypted_no
 
     async def get_thesis_details(
@@ -854,14 +861,14 @@ class YokTezApiClient:
                 source_detail_page_url=source_url,
                 error_message=(
                     "Could not determine thesis_key/encrypted_no. Supply them directly "
-                    "or pass a detail_page_url containing 'id' and 'no' query params."
+                    "or pass a detail_page_url containing 'kayitNo' and 'tezNo' query params."
                 ),
             )
 
         # If only IDs were given, reconstruct the source URL for downstream use.
         if source_url is None:
             source_url = HttpUrl(
-                self.YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE.format(
+                self.YOK_TEZ_DETAIL_URL_TEMPLATE.format(
                     thesis_key=thesis_key, encrypted_no=encrypted_no
                 )
             )
@@ -926,7 +933,7 @@ class YokTezApiClient:
 
         thesis_key, encrypted_no = self._extract_ids_from_detail_url(detail_page_url_str)
         if not thesis_key or not encrypted_no:
-            error_msg = "detail_page_url must contain 'id' and 'no' query params (use a URL from search results)."
+            error_msg = "detail_page_url must contain 'kayitNo' and 'tezNo' query params (use a URL from search results)."
         else:
             try:
                 actual_pdf_url_str, permission_error = await self._fetch_pdf_link(thesis_key, encrypted_no)

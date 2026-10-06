@@ -497,6 +497,27 @@ async def test_search_metadata_completeness(client: YokTezApiClient) -> None:
     )
 
 
+async def _assert_detail_url_live(client: YokTezApiClient, label: str, url: HttpUrl) -> None:
+    """An emitted detail_page_url must resolve on YÖK (the old tezDetay.jsp now 404s)."""
+    resp = await client._http_client.get(str(url), timeout=30)
+    try:
+        has_payload = bool(resp.json().get("danisman"))
+    except ValueError:
+        has_payload = False
+    record(
+        label,
+        "/tezBilgiDetay.jsp?" in str(url) and resp.status_code == 200 and has_payload,
+        f"HTTP {resp.status_code} payload={has_payload} url={str(url)[:90]}",
+    )
+
+
+async def test_search_detail_url_resolves(client: YokTezApiClient) -> None:
+    r = await client.search_theses(
+        YokTezSearchRequest(aranacak_kelime="yapay zeka", limit_per_page=1)
+    )
+    await _assert_detail_url_live(client, "search detail_page_url resolves", r.theses[0].detail_page_url)
+
+
 async def test_search_reference_data_control_chars(client: YokTezApiClient) -> None:
     """'anayasa mahkemesi' results embed raw control bytes (\\x02) in a referenceData title,
     which used to make the whole referenceData JSON unparseable and blank every author."""
@@ -559,6 +580,13 @@ async def test_recent_son_15_gun(client: YokTezApiClient) -> None:
             all([t.thesis_no, t.title, t.author, t.year, t.thesis_key, t.encrypted_no, t.detail_page_url]),
             f"sample [{t.thesis_no}] author={t.author} year={t.year}",
         )
+
+
+async def test_recent_detail_url_resolves(client: YokTezApiClient) -> None:
+    r = await client.list_recent_theses(
+        YokTezRecentListRequest(mode=YokTezRecentListMode.SON_15_GUN, limit_per_page=1)
+    )
+    await _assert_detail_url_live(client, "recent detail_page_url resolves", r.theses[0].detail_page_url)
 
 
 async def test_recent_bu_yil(client: YokTezApiClient) -> None:
@@ -663,6 +691,22 @@ async def test_details_via_ids(client: YokTezApiClient) -> None:
         and d.advisor
         and d.source_detail_page_url is not None,
         f"advisor={d.advisor!r} source_url={d.source_detail_page_url}",
+    )
+
+
+async def test_details_legacy_url(client: YokTezApiClient) -> None:
+    """Legacy tezDetay.jsp?id=&no= URLs held by clients must still be accepted."""
+    r = await client.search_theses(
+        YokTezSearchRequest(aranacak_kelime="yapay zeka", limit_per_page=1)
+    )
+    tz = r.theses[0]
+    legacy = f"https://tez.yok.gov.tr/UlusalTezMerkezi/tezDetay.jsp?id={tz.thesis_key}&no={tz.encrypted_no}"
+    d = await client.get_thesis_details(YokTezThesisDetailsRequest(detail_page_url=legacy))
+    ids = client._extract_ids_from_detail_url(legacy)
+    record(
+        "legacy tezDetay.jsp URL accepted",
+        d.error_message is None and d.advisor and ids == (tz.thesis_key, tz.encrypted_no),
+        f"advisor={d.advisor!r} ids_match={ids == (tz.thesis_key, tz.encrypted_no)}",
     )
 
 
@@ -836,7 +880,7 @@ async def test_doc_bad_ids(client: YokTezApiClient) -> None:
     """Unknown/garbled IDs must yield an error_message, not an exception."""
     doc = await client.get_thesis_pdf_as_markdown(
         YokTezDocumentRequest(
-            detail_page_url="https://tez.yok.gov.tr/UlusalTezMerkezi/tezDetay.jsp?id=xxx&no=yyy",
+            detail_page_url="https://tez.yok.gov.tr/UlusalTezMerkezi/tezBilgiDetay.jsp?kayitNo=xxx&tezNo=yyy",
             page_number=1,
         )
     )
@@ -868,12 +912,14 @@ async def main() -> int:
         await run("search: limit_per_page validation", lambda: test_search_results_per_page_bounds(client))
         await run("search: empty query", lambda: test_search_empty_query(client))
         await run("search: metadata completeness", lambda: test_search_metadata_completeness(client))
+        await run("search: detail_page_url resolves", lambda: test_search_detail_url_resolves(client))
         await run("search: referenceData control chars", lambda: test_search_reference_data_control_chars(client))
         await run("search: card title control chars", lambda: test_search_title_control_chars(client))
 
         await run("recent: SON_15_GUN", lambda: test_recent_son_15_gun(client))
         await run("recent: BU_YIL", lambda: test_recent_bu_yil(client))
         await run("recent: pagination", lambda: test_recent_pagination(client))
+        await run("recent: detail_page_url resolves", lambda: test_recent_detail_url_resolves(client))
         await run("recent: chains into thesis_details", lambda: test_recent_chains_to_details(client))
 
         url = None
@@ -884,6 +930,7 @@ async def main() -> int:
 
         await run("details: via URL", _capture_url)
         await run("details: via thesis_key+encrypted_no", lambda: test_details_via_ids(client))
+        await run("details: legacy tezDetay.jsp URL", lambda: test_details_legacy_url(client))
         await run("details: missing IDs validation", test_details_missing_ids)
         await run("details: bad IDs graceful", lambda: test_details_bad_ids(client))
         await run("details: 5 citation formats", lambda: test_details_citations_complete(client))
