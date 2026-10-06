@@ -228,13 +228,13 @@ class YokTezCompactThesisDetail(BaseModel):
     language: Optional[str] = Field(None, description="Thesis language (e.g. 'Türkçe').")
     subject: Optional[str] = Field(None, description="Subject area(s) of the thesis.")
     thesis_key: Optional[str] = Field(
-        None, description="YÖK internal kayitNo, used as the 'id' parameter in detail/PDF URLs."
+        None, description="YÖK internal kayitNo, used as the 'kayitNo' parameter in detail/PDF URLs."
     )
     encrypted_no: Optional[str] = Field(
-        None, description="YÖK internal tezNo, used as the 'no' parameter in detail/PDF URLs."
+        None, description="YÖK internal tezNo, used as the 'tezNo' parameter in detail/PDF URLs."
     )
     detail_page_url: Optional[HttpUrl] = Field(
-        None, description="URL to the thesis detail page on YÖK Tez Merkezi."
+        None, description="YÖK Tez Merkezi thesis detail URL (tezBilgiDetay.jsp with kayitNo/tezNo). Pass it to the details/document tools."
     )
 
 
