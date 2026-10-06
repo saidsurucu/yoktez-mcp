@@ -497,6 +497,23 @@ async def test_search_metadata_completeness(client: YokTezApiClient) -> None:
     )
 
 
+async def test_search_reference_data_control_chars(client: YokTezApiClient) -> None:
+    """'anayasa mahkemesi' results embed raw control bytes (\\x02) in a referenceData title,
+    which used to make the whole referenceData JSON unparseable and blank every author."""
+    r = await client.search_theses(
+        YokTezSearchRequest(aranacak_kelime="anayasa mahkemesi", limit_per_page=10)
+    )
+    if not r.theses:
+        record("referenceData with control chars", False, "no theses returned")
+        return
+    no_author = [t.thesis_no for t in r.theses if not t.author]
+    record(
+        "authors populated despite control chars in referenceData",
+        not no_author,
+        f"missing author on: {no_author[:5]}" if no_author else f"{len(r.theses)} results all have author",
+    )
+
+
 # ---------------- list_recent_yok_tez tests ----------------
 
 async def test_recent_son_15_gun(client: YokTezApiClient) -> None:
@@ -810,6 +827,7 @@ async def main() -> int:
         await run("search: limit_per_page validation", lambda: test_search_results_per_page_bounds(client))
         await run("search: empty query", lambda: test_search_empty_query(client))
         await run("search: metadata completeness", lambda: test_search_metadata_completeness(client))
+        await run("search: referenceData control chars", lambda: test_search_reference_data_control_chars(client))
 
         await run("recent: SON_15_GUN", lambda: test_recent_son_15_gun(client))
         await run("recent: BU_YIL", lambda: test_recent_bu_yil(client))

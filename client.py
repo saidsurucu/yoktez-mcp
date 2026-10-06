@@ -316,8 +316,12 @@ class YokTezApiClient:
         raw = page_source[brace_start:end]
         # The server emits JS-style trailing commas (e.g. `},\n    }`) which break json.loads.
         cleaned = re.sub(r",(\s*[}\]])", r"\1", raw)
+        # Titles copied from PDFs can carry raw control bytes (e.g. \x02 at hyphenation points)
+        # that json.loads rejects; drop non-whitespace C0 controls and let strict=False accept
+        # literal tabs/newlines inside strings.
+        cleaned = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", cleaned)
         try:
-            return json.loads(cleaned)
+            return json.loads(cleaned, strict=False)
         except json.JSONDecodeError as exc:
             logger.warning("referenceData JSON parse failed (%s); metadata fields will be empty.", exc)
             return {}
