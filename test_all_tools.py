@@ -695,8 +695,9 @@ async def test_doc_page_one(client: YokTezApiClient, url: HttpUrl) -> int:
         "doc page 1 fetched",
         doc.error_message is None
         and doc.total_pdf_pages > 0
-        and doc.thesis_title,
-        f"total_pages={doc.total_pdf_pages} chars={doc.characters_on_page} title={(doc.thesis_title or '')[:40]!r}",
+        and doc.retrieved_pdf_url is not None
+        and bool(doc.page_markdown_content),
+        f"total_pages={doc.total_pdf_pages} chars={doc.characters_on_page} err={doc.error_message!r}",
     )
     return doc.total_pdf_pages
 
@@ -789,6 +790,21 @@ async def test_doc_non_permissible(client: YokTezApiClient) -> None:
     )
 
 
+async def test_doc_bad_ids(client: YokTezApiClient) -> None:
+    """Unknown/garbled IDs must yield an error_message, not an exception."""
+    doc = await client.get_thesis_pdf_as_markdown(
+        YokTezDocumentRequest(
+            detail_page_url="https://tez.yok.gov.tr/UlusalTezMerkezi/tezDetay.jsp?id=xxx&no=yyy",
+            page_number=1,
+        )
+    )
+    record(
+        "bad IDs return error",
+        doc.error_message is not None and doc.page_markdown_content is None,
+        f"err={doc.error_message!r}",
+    )
+
+
 # ---------------- main ----------------
 
 async def main() -> int:
@@ -842,6 +858,7 @@ async def main() -> int:
         await run("document: pagination metadata", lambda: test_doc_pagination_metadata(client, url, total_pages))
         await run("document: cache stores entry", lambda: test_doc_cache_hit(client, url))
         await run("document: non-permissible PDF", lambda: test_doc_non_permissible(client))
+        await run("document: bad IDs graceful", lambda: test_doc_bad_ids(client))
 
     finally:
         await client.close_client_session()

@@ -422,9 +422,10 @@ async def get_yok_tez_document_markdown(
     page_number: int = Field(default=1, ge=1, description="The PDF page number (1-based) for which to retrieve Markdown content. Default is 1.")
 ) -> YokTezDocumentMarkdown:
     """
-    Retrieves a specific YÖK thesis PDF using its detail page URL.
-    It fetches metadata from the detail page, downloads the PDF (if permissible and not cached),
+    Retrieves a specific YÖK thesis PDF using its detail page URL (from search results).
+    It resolves the PDF download link, downloads the PDF (if permissible and not cached),
     isolates the specified PDF page, converts that page to Markdown, and returns the content.
+    If the author has restricted access, error_message contains YÖK's explanation.
     """
     doc_req = YokTezDocumentRequest(
         detail_page_url=detail_page_url,

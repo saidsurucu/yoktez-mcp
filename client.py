@@ -18,7 +18,7 @@ from markitdown import MarkItDown
 
 from models import (
     YokTezSearchRequest, YokTezCompactThesisDetail, YokTezSearchResult,
-    YokTezDocumentRequest, YokTezDocumentMarkdown, InternalThesisDetail,
+    YokTezDocumentRequest, YokTezDocumentMarkdown,
     YokTezThesisDetailsRequest, YokTezThesisDetails, YokTezKeywordPair,
     YokTezRecentListRequest, YokTezRecentListMode,
     YokTezAnabilimDali, YokTezAnabilimDaliListResult, YokTezAnabilimDaliSearchRequest,
@@ -43,9 +43,9 @@ class YokTezApiClient:
     YOK_TEZ_BASE_URL = "https://tez.yok.gov.tr"
     YOK_TEZ_SEARCH_PAGE_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tarama.jsp"
     YOK_TEZ_SEARCH_ACTION_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/SearchTez"
-    YOK_TEZ_DETAIL_URL_TEMPLATE = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezDetay.jsp?id={{thesis_key}}"
     YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezDetay.jsp?id={{thesis_key}}&no={{encrypted_no}}"
     YOK_TEZ_BILGI_DETAY_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tezBilgiDetay.jsp"
+    YOK_TEZ_GET_PDF_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/getTezPdf.jsp"
     YOK_TEZ_ISLEMLERI_URL = f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/TezIslemleri"
     YOK_TEZ_ALL_ABD_URL = (
         f"{YOK_TEZ_BASE_URL}/UlusalTezMerkezi/tarama.jsp?ajax=getAllABD&ensGrubu="
@@ -129,133 +129,34 @@ class YokTezApiClient:
             await self._http_client.aclose()
         logger.info("YokTezApiClient: Resources closed.")
 
-    def _parse_thesis_detail_html(self, soup: BeautifulSoup, detail_page_url_str: str) -> Dict[str, Any]:
-        """
-        Parses the HTML of a thesis detail page to extract metadata and PDF link information.
-        """
-        data = {
-            "pdf_download_href": None, "retrieved_pdf_url": None,
-            "thesis_no": None, "title_combined": None, "title_tr": None, "title_en": None,
-            "author": None, "advisor": None, "location_info": None, "subject_info": None,
-            "index_terms": None, "status_text": None, "thesis_type_text": None,
-            "language_text": None, "year_text": None, "pages_text": None,
-            "abstract_tr": None, "abstract_en": None,
-            "metadata_error_message": None, "pdf_permission_error_message": None,
-            "is_pdf_permissible": False
-        }
-        main_table = soup.find('table', attrs={'width': "100%", 'cellspacing': "0", 'cellpadding': "1"})
-        if not main_table:
-            logger.warning(f"Main detail table not found: {detail_page_url_str}")
-            data["metadata_error_message"] = "Main detail page table not found."
-            return data
-        rows = main_table.find_all('tr', recursive=False)
-        if len(rows) < 2:
-            data["metadata_error_message"] = "Not enough rows (data row) in detail table."
-            return data
-        data_row = rows[1]
-        cells = data_row.find_all('td', valign="top", recursive=False)
-        if len(cells) < 4:
-            data["metadata_error_message"] = "Missing cells in detail data row."
-            return data
-        data["thesis_no"] = cells[0].get_text(strip=True)
-        download_cell = cells[1]
-        pdf_link_tag = download_cell.find("a", href=re.compile(r"TezGoster\?key="))
-        if pdf_link_tag and pdf_link_tag.has_attr('href'):
-            data["pdf_download_href"] = pdf_link_tag['href']
-            data["retrieved_pdf_url"] = urllib.parse.urljoin(self.YOK_TEZ_BASE_URL + "/UlusalTezMerkezi/", data["pdf_download_href"])
-            data["is_pdf_permissible"] = True
-        else:
-            # No PDF link in the download cell → PDF is not accessible. YÖK shows different
-            # explanations depending on why (author-imposed time restriction, no permission, etc).
-            # Capture whatever text is present so the caller gets the real reason.
-            data["is_pdf_permissible"] = False
-            cell_text = download_cell.get_text(" ", strip=True)
-            if cell_text:
-                data["pdf_permission_error_message"] = cell_text
-            else:
-                data["pdf_permission_error_message"] = "PDF is not available for this thesis (no download link)."
-        kunye_cell = cells[2]
-        for br in kunye_cell.find_all("br"):
-            br.replace_with("\n")
-        kunye_parts = [part.strip() for part in kunye_cell.get_text(separator="\n").split('\n') if part.strip()]
-        current_part_index = 0
-        if kunye_parts:
-            title_candidates = []
-            while current_part_index < len(kunye_parts) and \
-                  not any(kunye_parts[current_part_index].startswith(lbl) for lbl in ["Yazar:", "Danışman:", "Yer Bilgisi:", "Konu:", "Dizin:"]):
-                title_candidates.append(kunye_parts[current_part_index])
-                current_part_index += 1
-            if title_candidates:
-                data["title_combined"] = " ".join(title_candidates)
-                title_split = data["title_combined"].split('/')
-                data["title_tr"] = title_split[0].strip()
-                if len(title_split) > 1:
-                    data["title_en"] = " / ".join(ts.strip() for ts in title_split[1:])
-            for i in range(current_part_index, len(kunye_parts)):
-                part = kunye_parts[i]
-                if part.startswith("Yazar:"):
-                    data["author"] = part.replace("Yazar:", "", 1).strip()
-                elif part.startswith("Danışman:"):
-                    data["advisor"] = part.replace("Danışman:", "", 1).strip()
-                elif part.startswith("Yer Bilgisi:"):
-                    data["location_info"] = part.replace("Yer Bilgisi:", "", 1).strip()
-                elif part.startswith("Konu:"):
-                    data["subject_info"] = part.replace("Konu:", "", 1).strip()
-                elif part.startswith("Dizin:"):
-                    data["index_terms"] = part.replace("Dizin:", "", 1).strip()
-        durum_cell = cells[3]
-        for br in durum_cell.find_all("br"):
-            br.replace_with("\n")
-        durum_parts = [part.strip() for part in durum_cell.get_text(separator="\n").split('\n') if part.strip()]
-        if len(durum_parts) > 0:
-            data["status_text"] = durum_parts[0]
-        if len(durum_parts) > 1:
-            data["thesis_type_text"] = durum_parts[1]
-        if len(durum_parts) > 2:
-            data["language_text"] = durum_parts[2]
-        if len(durum_parts) > 3:
-            data["year_text"] = durum_parts[3]
-        if len(durum_parts) > 4:
-            data["pages_text"] = durum_parts[4]
-        abstract_tr_td = main_table.find("td", id="td0")
-        if abstract_tr_td:
-            data["abstract_tr"] = abstract_tr_td.get_text(strip=True)
-        abstract_en_td = main_table.find("td", id="td1")
-        if abstract_en_td:
-            data["abstract_en"] = abstract_en_td.get_text(strip=True)
-        return data
+    async def _fetch_pdf_link(
+        self, thesis_key: str, encrypted_no: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Resolve a thesis' PDF download URL via YÖK's getTezPdf.jsp fragment.
 
-    async def _fetch_thesis_details_from_key(self, thesis_key: str, encrypted_no: Optional[str] = None) -> Optional[InternalThesisDetail]:
+        The 2026 site has no per-thesis detail page; the results page lazy-loads a small
+        HTML fragment per card instead. It holds either a 'TezGoster?key=...' link or an
+        info message explaining why the PDF is unavailable (e.g. author-imposed embargo).
+
+        Returns (pdf_url, error_message) — exactly one of them is set.
         """
-        Fetches and parses comprehensive thesis details from its detail page using a thesis key.
-        """
-        if encrypted_no:
-            detail_page_url_str = self.YOK_TEZ_DETAIL_URL_WITH_NO_TEMPLATE.format(
-                thesis_key=thesis_key, encrypted_no=encrypted_no
+        response = await self._http_client.get(
+            self.YOK_TEZ_GET_PDF_URL,
+            params={"kayitNo": thesis_key, "tezNo": encrypted_no},
+            timeout=self._request_timeout,
+            headers={"Referer": self.YOK_TEZ_SEARCH_PAGE_URL},
+        )
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "lxml")
+        pdf_link_tag = soup.find("a", href=re.compile(r"TezGoster\?key="))
+        if pdf_link_tag:
+            pdf_url = urllib.parse.urljoin(
+                self.YOK_TEZ_BASE_URL + "/UlusalTezMerkezi/", pdf_link_tag["href"].strip()
             )
-        else:
-            detail_page_url_str = self.YOK_TEZ_DETAIL_URL_TEMPLATE.format(thesis_key=thesis_key)
-        try:
-            response = await self._http_client.get(detail_page_url_str, timeout=self._request_timeout)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'lxml')
-            parsed_data = self._parse_thesis_detail_html(soup, detail_page_url_str)
-            return InternalThesisDetail(
-                thesis_no=parsed_data.get("thesis_no"), title=parsed_data.get("title_tr"),
-                title_en=parsed_data.get("title_en"), author=parsed_data.get("author"),
-                advisor=parsed_data.get("advisor"), university_info=parsed_data.get("location_info"),
-                subject=parsed_data.get("subject_info"), status=parsed_data.get("status_text"),
-                thesis_type=parsed_data.get("thesis_type_text"), language=parsed_data.get("language_text"),
-                year=parsed_data.get("year_text"), pages=parsed_data.get("pages_text"),
-                abstract_tr=parsed_data.get("abstract_tr"), detail_page_url=HttpUrl(detail_page_url_str),
-                thesis_key=thesis_key
-            )
-        except httpx.RequestError as e:
-            logger.error(f"HTTPX Error fetching thesis details: {e} URL: {detail_page_url_str}")
-            return None
-        except Exception as e:
-            logger.error(f"Parsing Error fetching thesis details: {e} URL: {detail_page_url_str}", exc_info=True)
-            return None
+            return pdf_url, None
+        info_msg = soup.find(class_="pdf-info-msg")
+        reason = (info_msg or soup).get_text(" ", strip=True)
+        return None, reason or "PDF is not available for this thesis (no download link)."
 
     @staticmethod
     def _parse_int_with_thousands(text: str) -> Optional[int]:
@@ -1003,38 +904,32 @@ class YokTezApiClient:
 
     async def get_thesis_pdf_as_markdown(self, request: YokTezDocumentRequest) -> YokTezDocumentMarkdown:
         """
-        Retrieves a specific YÖK thesis, fetches metadata, downloads PDF (if permissible & not cached),
-        isolates the specified PDF page using pypdf, and converts that page to Markdown using MarkItDown.
+        Retrieves a specific YÖK thesis PDF, resolves its download link via getTezPdf.jsp,
+        downloads the PDF (if permissible & not cached), isolates the specified page using
+        pypdf, and converts that page to Markdown using MarkItDown.
         """
         detail_page_url_str = str(request.detail_page_url)
         original_pdf_bytes = await self._pdf_bytes_cache.get(detail_page_url_str)
-        metadata: Dict[str, Any] = {}
         error_msg: Optional[str] = None
         actual_pdf_url_str: Optional[str] = None
-        extracted_thesis_title: Optional[str] = None
-        extracted_thesis_author: Optional[str] = None
         is_pdf_permissible: bool = False
         page_markdown_content: Optional[str] = None
         total_pdf_pages: int = 0
         characters_on_page: Optional[int] = None
 
-        try:
-            response = await self._http_client.get(detail_page_url_str, timeout=self._request_timeout)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'lxml')
-            metadata = self._parse_thesis_detail_html(soup, detail_page_url_str)
-            actual_pdf_url_str = metadata.get("retrieved_pdf_url")
-            extracted_thesis_title = metadata.get("title_tr") or metadata.get("title_combined")
-            extracted_thesis_author = metadata.get("author")
-            is_pdf_permissible = metadata.get("is_pdf_permissible", False)
-            if metadata.get("metadata_error_message"):
-                error_msg = (error_msg + "; " if error_msg else "") + metadata["metadata_error_message"]
-            if metadata.get("pdf_permission_error_message"):
-                error_msg = (error_msg + "; " if error_msg else "") + metadata["pdf_permission_error_message"]
-        except httpx.RequestError as e:
-            error_msg = (error_msg + "; " if error_msg else "") + f"Failed to fetch detail page: {e}"
-        except Exception as e:
-            error_msg = (error_msg + "; " if error_msg else "") + f"Error parsing detail page: {e}"
+        thesis_key, encrypted_no = self._extract_ids_from_detail_url(detail_page_url_str)
+        if not thesis_key or not encrypted_no:
+            error_msg = "detail_page_url must contain 'id' and 'no' query params (use a URL from search results)."
+        else:
+            try:
+                actual_pdf_url_str, permission_error = await self._fetch_pdf_link(thesis_key, encrypted_no)
+                is_pdf_permissible = actual_pdf_url_str is not None
+                if permission_error:
+                    error_msg = permission_error
+            except httpx.HTTPStatusError as e:
+                error_msg = f"HTTP {e.response.status_code} from getTezPdf.jsp (invalid thesis id?)."
+            except httpx.RequestError as e:
+                error_msg = f"Failed to resolve PDF link: {e}"
 
         if is_pdf_permissible and actual_pdf_url_str and not original_pdf_bytes:
             try:
@@ -1049,8 +944,6 @@ class YokTezApiClient:
                 error_msg = (error_msg + "; " if error_msg else "") + f"PDF download error: {e}"
         elif is_pdf_permissible and original_pdf_bytes:
             logger.info(f"CACHE Hit for PDF: {detail_page_url_str}")
-        elif not is_pdf_permissible and not error_msg:
-            error_msg = (error_msg + "; " if error_msg else "") + metadata.get("pdf_permission_error_message", "PDF not permissible.")
 
         if original_pdf_bytes and is_pdf_permissible:
             try:
@@ -1091,5 +984,4 @@ class YokTezApiClient:
             current_pdf_page=request.page_number, total_pdf_pages=total_pdf_pages,
             is_paginated=total_pdf_pages > 1, characters_on_page=characters_on_page,
             error_message=error_msg.strip("; ") if error_msg else None,
-            thesis_title=extracted_thesis_title, thesis_author=extracted_thesis_author
         )

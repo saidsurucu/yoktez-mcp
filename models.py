@@ -298,12 +298,6 @@ class YokTezDocumentMarkdown(BaseModel):
     error_message: Optional[str] = Field(
         None, description="Error message if document retrieval or processing failed."
     )
-    thesis_title: Optional[str] = Field(
-        None, description="Title of the thesis (Turkish), extracted from the detail page."
-    )
-    thesis_author: Optional[str] = Field(
-        None, description="Author of the thesis, extracted from the detail page."
-    )
 
 
 class YokTezRecentListRequest(BaseModel):
@@ -466,24 +460,3 @@ class YokTezThesisDetails(BaseModel):
     error_message: Optional[str] = Field(
         None, description="Error message if fetching or parsing failed."
     )
-
-
-class InternalThesisDetail(BaseModel):
-    """Internal model for comprehensive thesis details parsed from the detail page."""
-    thesis_no: Optional[str] = None
-    pdf_url: Optional[str] = None
-    title: Optional[str] = None
-    title_en: Optional[str] = None
-    author: Optional[str] = None
-    advisor: Optional[str] = None
-    university_info: Optional[str] = None
-    subject: Optional[str] = None
-    status: Optional[str] = None
-    thesis_type: Optional[str] = None
-    language: Optional[str] = None
-    year: Optional[str] = None
-    pages: Optional[str] = None
-    abstract_tr: Optional[str] = None
-    abstract_en: Optional[str] = None
-    detail_page_url: Optional[HttpUrl] = None
-    thesis_key: Optional[str] = None
