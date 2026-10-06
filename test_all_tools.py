@@ -518,6 +518,48 @@ async def test_search_detail_url_resolves(client: YokTezApiClient) -> None:
     await _assert_detail_url_live(client, "search detail_page_url resolves", r.theses[0].detail_page_url)
 
 
+async def test_search_reference_data_control_chars(client: YokTezApiClient) -> None:
+    """'anayasa mahkemesi' results embed raw control bytes (\\x02) in a referenceData title,
+    which used to make the whole referenceData JSON unparseable and blank every author."""
+    r = await client.search_theses(
+        YokTezSearchRequest(aranacak_kelime="anayasa mahkemesi", limit_per_page=10)
+    )
+    if not r.theses:
+        record("referenceData with control chars", False, "no theses returned")
+        return
+    no_author = [t.thesis_no for t in r.theses if not t.author]
+    record(
+        "authors populated despite control chars in referenceData",
+        not no_author,
+        f"missing author on: {no_author[:5]}" if no_author else f"{len(r.theses)} results all have author",
+    )
+
+
+async def test_search_title_control_chars(client: YokTezApiClient) -> None:
+    """Thesis 333830's title is stored by YÖK with \\x02 bytes mid-word
+    ('hali\\x02nde açılabi\\x02lecek'); the card title must come back clean."""
+    r = await client.search_theses(
+        YokTezSearchRequest(
+            aranacak_kelime="marka hakkına tecavüz",
+            arama_alani=YokTezSearchFieldEnum.TEZ_ADI,
+            limit_per_page=50,
+        )
+    )
+    target = next((t for t in r.theses if t.thesis_no == "333830"), None)
+    if target is None:
+        record("card title control chars stripped", False, f"thesis 333830 not in {len(r.theses)} results")
+        return
+    dirty = [
+        t.thesis_no for t in r.theses
+        if any(ord(ch) < 0x20 for ch in (t.title or "") + (t.title_translated or ""))
+    ]
+    record(
+        "card title control chars stripped",
+        not dirty and "halinde açılabilecek" in (target.title or ""),
+        f"dirty titles: {dirty}" if dirty else f"333830 title={target.title!r}",
+    )
+
+
 # ---------------- list_recent_yok_tez tests ----------------
 
 async def test_recent_son_15_gun(client: YokTezApiClient) -> None:
@@ -871,6 +913,8 @@ async def main() -> int:
         await run("search: empty query", lambda: test_search_empty_query(client))
         await run("search: metadata completeness", lambda: test_search_metadata_completeness(client))
         await run("search: detail_page_url resolves", lambda: test_search_detail_url_resolves(client))
+        await run("search: referenceData control chars", lambda: test_search_reference_data_control_chars(client))
+        await run("search: card title control chars", lambda: test_search_title_control_chars(client))
 
         await run("recent: SON_15_GUN", lambda: test_recent_son_15_gun(client))
         await run("recent: BU_YIL", lambda: test_recent_bu_yil(client))
