@@ -27,6 +27,10 @@ from cache import MultiTierCache, AIOFILES_AVAILABLE
 
 logger = logging.getLogger(__name__)
 
+# Non-whitespace C0 control characters. YÖK titles copied from PDFs can carry these
+# (e.g. \x02 at hyphenation points), both in result-card HTML and in referenceData.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
 if not logger.hasHandlers():  # Pragma: no cover
     logging.basicConfig(
         level=logging.INFO,
@@ -217,8 +221,11 @@ class YokTezApiClient:
         raw = page_source[brace_start:end]
         # The server emits JS-style trailing commas (e.g. `},\n    }`) which break json.loads.
         cleaned = re.sub(r",(\s*[}\]])", r"\1", raw)
+        # json.loads rejects raw control bytes; drop them and let strict=False accept
+        # literal tabs/newlines inside strings.
+        cleaned = _CONTROL_CHARS_RE.sub("", cleaned)
         try:
-            return json.loads(cleaned)
+            return json.loads(cleaned, strict=False)
         except json.JSONDecodeError as exc:
             logger.warning("referenceData JSON parse failed (%s); metadata fields will be empty.", exc)
             return {}
@@ -243,7 +250,7 @@ class YokTezApiClient:
                 title_en = None
                 title_div = card.find("div", class_="card-title")
                 if title_div:
-                    title_tr = title_div.get_text(strip=True) or None
+                    title_tr = _CONTROL_CHARS_RE.sub("", title_div.get_text(strip=True)) or None
 
                 # English translation is in a card-info with italic style
                 italic_info = card.find(
@@ -252,7 +259,7 @@ class YokTezApiClient:
                     style=lambda s: bool(s) and "font-style: italic" in s.lower(),
                 )
                 if italic_info:
-                    title_en = italic_info.get_text(strip=True) or None
+                    title_en = _CONTROL_CHARS_RE.sub("", italic_info.get_text(strip=True)) or None
 
                 # Visible thesis number lives in another card-info with a <strong>Tez No:</strong> label
                 visible_tez_no: Optional[str] = None
