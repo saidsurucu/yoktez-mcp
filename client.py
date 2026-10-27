@@ -593,7 +593,8 @@ class YokTezApiClient:
 
         Empty Enstitu/yil values MUST be sent as '0' — YÖK's Bul button normalises
         them to 0 before submit, and the server rejects empty values
-        ("Geçersiz sorgulama").
+        ("Geçersiz sorgulama"). 'Metin' (the form's abstract box, added in 2026)
+        must be present even when empty, or YÖK returns its system-error page.
         """
         return {
             "uniad": "", "Universite": "", "uni_yoksis_id": "", "source": "TR",
@@ -611,6 +612,7 @@ class YokTezApiClient:
             "DanismanAdSoyad": request.danisman or "",
             "Dizin": request.dizin_terimleri or "",
             "TezNo": "",
+            "Metin": "",
             "Bolum": "0",
             "islem": "2",
             "-find": "  Bul",
