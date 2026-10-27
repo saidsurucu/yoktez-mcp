@@ -111,6 +111,32 @@ Bu bölüm, YokTez MCP aracını 5ire gibi Claude Desktop dışındaki MCP istem
 
 4.  Claude Desktop'ı kapatıp yeniden başlatın.
 
+---
+
+🧩 **MCP Yerine Skill Olarak Kullanım (Claude in Chrome / Claude Desktop tarayıcısı)**
+
+Sunucu kurmak istemeyenler için aynı yetenekler [`skills/yoktez`](./skills/yoktez) klasöründe bir Claude **skill**'i olarak da var. Skill, tarayıcıda açık bir `tez.yok.gov.tr` sekmesine JavaScript enjekte ederek çalışır; Python, `uv` ya da MCP sunucusu gerekmez. YÖK'te CAPTCHA veya giriş zorunluluğu olmadığından hem Claude in Chrome eklentisiyle hem de Claude Desktop'ın yerleşik tarayıcısıyla çalışır.
+
+Skill'in yapabildikleri:
+
+* Anahtar kelimeyle arama (tez adı / yazar / danışman / konu / anahtar kelime / özet; en fazla 3 terim, ve/veya)
+* Detaylı arama: Anabilim Dalı kodları (birden fazlası birleştirilir), tez adı, yazar, danışman, anahtar kelime, özet, **tez numarası**, tür, dil, yıl, izin durumu
+* Anabilim Dalı adından kod bulma, son eklenen tezler
+* Danışman, Türkçe/İngilizce özet, anahtar kelimeler ve hazır atıflar (APA, IEEE, MLA, Chicago, Harvard)
+* Tez PDF'ini sayfa aralığıyla metin olarak okuma (yazarın kısıtladığı tezlerde kısıtlama gerekçesini bildirir)
+
+**Kurulum (Claude Code):**
+
+```bash
+git clone https://github.com/saidsurucu/yoktez-mcp && cp -r yoktez-mcp/skills/yoktez ~/.claude/skills/
+```
+
+**Kurulum (Claude Desktop / claude.ai):** `skills/yoktez` klasörünü zip'leyip **Settings → Capabilities → Skills** bölümünden yükleyin.
+
+Ayrıntılar için [`skills/yoktez/SKILL.md`](./skills/yoktez/SKILL.md) ve [`skills/yoktez/reference.md`](./skills/yoktez/reference.md) dosyalarına bakın.
+
+---
+
 🛠️ **Kullanılabilir Araçlar (MCP Tools)**
 
 Bu FastMCP sunucusu LLM modelleri için aşağıdaki araçları sunar:

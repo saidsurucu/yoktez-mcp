@@ -1,0 +1,7 @@
+{
+  "name": "yoktez-skill-tests",
+  "private": true,
+  "type": "commonjs",
+  "scripts": { "test": "node --test --require ./setup.js" },
+  "dependencies": { "jsdom": "^24.0.0" }
+}
